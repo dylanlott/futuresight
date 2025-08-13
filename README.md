@@ -1,6 +1,8 @@
 # FutureSight 🔮
 
-A minimal terminal dashboard for interacting with and observing the [Signet](https://signet.sh) network.
+> "Is the inevitable any less miraculous?" - _Veldka, wandering sage_
+
+FutureSight is a minimal terminal dashboard for interacting with and observing the [Signet](https://signet.sh) network.
 
 ![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white) ![Ethereum](https://img.shields.io/badge/Ethereum-3C3C3D?logo=ethereum&logoColor=white)
 
