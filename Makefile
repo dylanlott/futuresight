@@ -1,23 +1,21 @@
-# Simple Makefile for FutureSight
-
-CARGO ?= cargo
 BIN_NAME := futuresight
+CARGO ?= cargo
 
-# Default block delay threshold (overridden by env or CLI)
+## Defaults are set for Pecorino test net
 BLOCK_DELAY_SECS ?= 60
-RPC_URL ?= http://localhost:8545
-SIGNET_RPC_URL ?= http://rpc.pecorino.signet.sh
+RPC_URL ?= http://rpc.pecorino.signet.sh
 
-.PHONY: help build run dev release fmt lint clean test watch
+.PHONY: help build run dev release fmt lint clean test watch pecorino
 
 help:
 	@echo "FutureSight Make Targets"
-	@echo "  make signet         - Run with Signet RPC defaults"
+	@echo "------------------------"
 	@echo "  make build          - Build debug binary"
 	@echo "  make release        - Build optimized release binary"
 	@echo "  make run            - Run (debug) with optional RPC_URL and BLOCK_DELAY_SECS env vars"
 	@echo "  make dev            - Run with cargo watch (requires cargo-watch)"
 	@echo "  make test           - Run tests (none yet)"
+	@echo "  make watch          - "Runs FutureSight with cargo-watch; Requires cargo-watch to be installed"
 	@echo "  make fmt            - Format code"
 	@echo "  make lint           - Run clippy lints"
 	@echo "  make clean          - Clean target directory"
@@ -49,6 +47,3 @@ clean:
 
 test:
 	$(CARGO) test --all
-
-signet:
-	$(CARGO) run -- $(SIGNET_RPC_URL) $(BLOCK_DELAY_SECS)

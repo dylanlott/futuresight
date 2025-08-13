@@ -1,6 +1,6 @@
 # FutureSight 🔮
 
-> A minimal terminal dashboard for interacting with and observing the Signet network.
+A minimal terminal dashboard for interacting with and observing the [Signet](https://signet.sh) network.
 
 ![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white) ![Ethereum](https://img.shields.io/badge/Ethereum-3C3C3D?logo=ethereum&logoColor=white)
 
@@ -12,52 +12,33 @@
 
 ## Installation
 
+*Pre-requisites: `make` and `rust` tooling*
+
 Clone the repository and build with Cargo:
 
 ```bash
 git clone https://github.com/dylanlott/futuresight
 cd futuresight
-cargo build --release
+cargo build --release && cargo run
 ```
 
 ## Usage
 
-Run with default settings (connects to `http://localhost:8545`):
+`tl;dr` `make run`  starts the dashboard for the Pecorino test net.
 
 ```bash
-cargo run
-```
-
-Connect to a Signet RPC endpoint:
-
-```bash
-# the pecorino test net
-cargo run -- https://rpc.pecorino.signet.sh
-```
-
-Specify a 30 second block delay alert threshold (seconds) either as a second argument or env variable:
-
-```bash
+# equivalent to make run
 cargo run -- https://rpc.pecorino.signet.sh 30 
-BLOCK_DELAY_SECS=120 cargo run -- https://mainnet.infura.io/v3/your-api-key
 ```
 
-Show the help text:
-
-```bash
-cargo run -- --help
-cargo run -- --version
-```
-
-### Using the Makefile
+### Make Commands
 
 Common shortcuts:
 
 ```bash
-make signet		  # run futuresight
 make build        # debug build
 make release      # optimized build
-make run          # run (uses RPC_URL & BLOCK_DELAY_SECS env vars)
+make run          # run FutureSight (targets Pecorino test network by default)
 make fmt          # run cargo fmt
 make lint         # run clippy
 make test         # run tests
@@ -79,7 +60,7 @@ FutureSight currently displays the following data:
 - **Recent Blocks**: Rolling history of the latest blocks with tx count & gas utilization
 - **Alerts**: Stale connection and block delay warnings
 
-
+![FutureSight Dashboard](./assets/futuresight-dashboard.png)
 
 ## License
 
