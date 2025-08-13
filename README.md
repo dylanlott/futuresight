@@ -33,8 +33,37 @@ cargo run
 Connect to a custom RPC endpoint:
 
 ```bash
+# any ethereum node
 cargo run -- http://your-ethereum-node:8545
-cargo run -- https://mainnet.infura.io/v3/your-api-key
+# the pecorino test net
+cargo run -- https://rpc.pecorino.signet.sh
+```
+
+Specify a block delay alert threshold (seconds) either as second arg or env:
+
+```bash
+cargo run -- https://mainnet.infura.io/v3/your-api-key 90
+BLOCK_DELAY_SECS=120 cargo run -- https://mainnet.infura.io/v3/your-api-key
+```
+
+Show help / version:
+
+```bash
+cargo run -- --help
+cargo run -- --version
+```
+
+### Using the Makefile
+
+Common shortcuts:
+
+```bash
+make build        # debug build
+make release      # optimized build
+make run          # run (uses RPC_URL & BLOCK_DELAY_SECS env vars)
+make fmt          # format
+make lint         # clippy (warnings non-fatal)
+make test         # run tests (none yet)
 ```
 
 ### Controls
@@ -47,8 +76,11 @@ The dashboard displays:
 
 - **Connection Status**: Current RPC connection state and last update time
 - **Block Height**: Latest block number from the network
+	- Shows age since last block and alerts if older than threshold
 - **Gas Price**: Current gas price in both Gwei and wei
 - **Network Peers**: Number of connected peers (if supported by the RPC)
+ - **Recent Blocks**: Rolling history of the latest blocks with tx count & gas utilization
+ - **Alerts**: Stale connection and block delay warnings
 
 ## Architecture
 
