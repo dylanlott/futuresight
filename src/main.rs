@@ -1,6 +1,9 @@
 mod data;
 mod ui;
 
+use data::MetricsCollector;
+use ui::Dashboard;
+
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -8,57 +11,54 @@ use crossterm::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{
-    env,
     io::{Stdout, stdout},
     time::Duration,
 };
+use clap::Parser;
 use tokio::time;
-
-use data::{BLOCK_DELAY_DEFAULT, MetricsCollector};
-use ui::Dashboard;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 type CrosstermTerminal = Terminal<CrosstermBackend<Stdout>>;
 
+#[derive(Parser, Debug)]
+#[command(
+    name = env!("CARGO_PKG_NAME"),
+    version = env!("CARGO_PKG_VERSION"),
+    about = "FutureSight is a terminal dashboard showing Ethereum RPC metrics."
+)]
+struct Cli {
+    /// Ethereum JSON-RPC endpoint
+    #[arg(default_value = "http://rpc.pecorino.signet.sh", env = "RPC_URL")]
+    rpc_url: String,
+
+    /// Seconds before block delay alert is displayed
+    #[arg(default_value_t = data::BLOCK_DELAY_DEFAULT, env = "BLOCK_DELAY_SECS")]
+    block_delay_secs: u64,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args: Vec<String> = env::args().collect();
-    let program = args.get(0).cloned().unwrap_or_else(|| "futuresight".into());
-
-    // Simple flag handling
-    if args.iter().any(|a| a == "-h" || a == "--help") {
-        print_help(&program);
+    let cli = Cli::parse();
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        print_help(&args[0]);
         return Ok(());
     }
-    if args.iter().any(|a| a == "-V" || a == "--version") {
-        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
-        return Ok(());
-    }
-
-    // Positional args: [1] rpc_url, [2] block_delay_threshold
-    let rpc_url = args
-        .get(1)
-        .cloned()
-        .unwrap_or_else(|| "http://localhost:8545".to_string());
 
     println!(
-        "FutureSight {} - Ethereum RPC terminal dashboard",
+        "FutureSight {} - Signet terminal dashboard",
         env!("CARGO_PKG_VERSION")
     );
-    println!("RPC URL: {}", rpc_url);
+    println!("=== Connecting to RPC URL: {} ===", cli.rpc_url);
     println!("Press 'q' to quit. Use --help for options.");
 
     let mut terminal = setup_terminal()?;
     let mut dashboard = Dashboard::new();
-    
-    let cli_delay = args.get(2).and_then(|s| s.parse::<u64>().ok());
-    let env_delay = std::env::var("BLOCK_DELAY_SECS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok());
-    let block_delay_threshold = cli_delay.or(env_delay).unwrap_or(BLOCK_DELAY_DEFAULT);
+
+    let block_delay_threshold = cli.block_delay_secs;
 
     // create a metrics collector with the given configs
-    let mut collector = MetricsCollector::new(rpc_url, block_delay_threshold);
+    let mut collector = MetricsCollector::new(cli.rpc_url.clone(), block_delay_threshold);
 
     // collect metrics at startup to prime the dashboard
     collector.collect_metrics().await;
