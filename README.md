@@ -1,23 +1,21 @@
-# FutureSight
+# FutureSight 🔮
 
-A minimal terminal dashboard for monitoring Ethereum JSON RPC servers using ratatui.
+> A minimal terminal dashboard for interacting with and observing the Signet network.
 
-![Terminal Dashboard](https://img.shields.io/badge/Terminal-Dashboard-blue) ![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white) ![Ethereum](https://img.shields.io/badge/Ethereum-3C3C3D?logo=ethereum&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white) ![Ethereum](https://img.shields.io/badge/Ethereum-3C3C3D?logo=ethereum&logoColor=white)
 
 ## Features
 
-- **Real-time Monitoring**: Track block height, gas prices, and peer count
+- **Realtime Block Monitoring**: Tracks a list of observed block heights, gas prices, and transaction counts
 - **Connection Status**: Visual indication of RPC server connectivity
-- **Clean Terminal UI**: Built with ratatui for a responsive interface
-- **Minimal Resource Usage**: Lightweight monitoring with 5-second update intervals
-- **Error Handling**: Graceful handling of RPC connection issues
+- **Chain Halt Detection**: Alerts if a new block hasn't been detected within the configured threshold
 
 ## Installation
 
 Clone the repository and build with Cargo:
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/dylanlott/futuresight
 cd futuresight
 cargo build --release
 ```
@@ -30,23 +28,21 @@ Run with default settings (connects to `http://localhost:8545`):
 cargo run
 ```
 
-Connect to a custom RPC endpoint:
+Connect to a Signet RPC endpoint:
 
 ```bash
-# any ethereum node
-cargo run -- http://your-ethereum-node:8545
 # the pecorino test net
 cargo run -- https://rpc.pecorino.signet.sh
 ```
 
-Specify a block delay alert threshold (seconds) either as second arg or env:
+Specify a 30 second block delay alert threshold (seconds) either as a second argument or env variable:
 
 ```bash
-cargo run -- https://mainnet.infura.io/v3/your-api-key 90
+cargo run -- https://rpc.pecorino.signet.sh 30 
 BLOCK_DELAY_SECS=120 cargo run -- https://mainnet.infura.io/v3/your-api-key
 ```
 
-Show help / version:
+Show the help text:
 
 ```bash
 cargo run -- --help
@@ -58,49 +54,32 @@ cargo run -- --version
 Common shortcuts:
 
 ```bash
+make signet		  # run futuresight
 make build        # debug build
 make release      # optimized build
 make run          # run (uses RPC_URL & BLOCK_DELAY_SECS env vars)
-make fmt          # format
-make lint         # clippy (warnings non-fatal)
-make test         # run tests (none yet)
+make fmt          # run cargo fmt
+make lint         # run clippy
+make test         # run tests
 ```
 
 ### Controls
 
 - **q** or **Esc**: Quit the application
 
-## Dashboard Information
+## Dashboard
 
-The dashboard displays:
+FutureSight currently displays the following data:
 
 - **Connection Status**: Current RPC connection state and last update time
 - **Block Height**: Latest block number from the network
-	- Shows age since last block and alerts if older than threshold
-- **Gas Price**: Current gas price in both Gwei and wei
-- **Network Peers**: Number of connected peers (if supported by the RPC)
- - **Recent Blocks**: Rolling history of the latest blocks with tx count & gas utilization
- - **Alerts**: Stale connection and block delay warnings
+  - Shows time since last block and displays an alert if it's past the configured threshold
+  - Shows a list of blocks as they're received with minimal block info attached
+- **Gas Price**: Current gas price displayed in gwei and wei
+- **Recent Blocks**: Rolling history of the latest blocks with tx count & gas utilization
+- **Alerts**: Stale connection and block delay warnings
 
-## Architecture
 
-The project maintains clean separation between layers:
-
-- **Data Layer** (`src/data.rs`): RPC client and metrics collection
-- **Presentation Layer** (`src/ui.rs`): Terminal UI components and rendering
-- **Main Application** (`src/main.rs`): Event loop and terminal management
-
-## Requirements
-
-- Rust 1.70+
-- Access to an Ethereum JSON RPC endpoint
-
-## Dependencies
-
-- [ratatui](https://github.com/ratatui-org/ratatui) - Terminal user interface
-- [tokio](https://tokio.rs/) - Async runtime
-- [reqwest](https://github.com/seanmonstar/reqwest) - HTTP client
-- [crossterm](https://github.com/crossterm-rs/crossterm) - Terminal control
 
 ## License
 
