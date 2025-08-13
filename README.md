@@ -4,11 +4,18 @@ A minimal terminal dashboard for interacting with and observing the [Signet](htt
 
 ![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white) ![Ethereum](https://img.shields.io/badge/Ethereum-3C3C3D?logo=ethereum&logoColor=white)
 
-## Features
+## Dashboard
 
-- **Realtime Block Monitoring**: Tracks a list of observed block heights, gas prices, and transaction counts
-- **Connection Status**: Visual indication of RPC server connectivity
+![FutureSight Dashboard](./assets/futuresight-dashboard.png)
+
+FutureSight currently displays the following data:
+
+- **Connection Status**: Current RPC connection state and last update time
 - **Chain Halt Detection**: Alerts if a new block hasn't been detected within the configured threshold
+- **Recent Blocks**: Rolling history of the latest blocks with tx count & gas utilization
+- **Block Height**: Displays the latest block number from the network
+- **Gas Price**: Current gas price displayed in gwei and wei
+- **Alerts**: Stale connection and block delay warnings
 
 ## Installation
 
@@ -47,20 +54,6 @@ make test         # run tests
 ### Controls
 
 - **q** or **Esc**: Quit the application
-
-## Dashboard
-
-FutureSight currently displays the following data:
-
-- **Connection Status**: Current RPC connection state and last update time
-- **Block Height**: Latest block number from the network
-  - Shows time since last block and displays an alert if it's past the configured threshold
-  - Shows a list of blocks as they're received with minimal block info attached
-- **Gas Price**: Current gas price displayed in gwei and wei
-- **Recent Blocks**: Rolling history of the latest blocks with tx count & gas utilization
-- **Alerts**: Stale connection and block delay warnings
-
-![FutureSight Dashboard](./assets/futuresight-dashboard.png)
 
 ## License
 
