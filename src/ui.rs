@@ -1,13 +1,14 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame,
 };
 use std::time::Duration;
 
-use crate::data::{ConnectionStatus, EthMetrics, STALE_AFTER};
+use crate::config::STALE_AFTER;
+use crate::data::{ConnectionStatus, SignetMetrics};
 
 pub struct Dashboard {
     pub should_quit: bool,
@@ -22,16 +23,15 @@ impl Dashboard {
         self.should_quit = true;
     }
 
-    pub fn render(&self, frame: &mut Frame, metrics: &EthMetrics) {
-    let chunks = Layout::default()
+    pub fn render(&self, frame: &mut Frame, metrics: &SignetMetrics) {
+        let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3), // connection
                 Constraint::Length(3), // chain id
                 Constraint::Length(3), // block
                 Constraint::Length(3), // gas
-                Constraint::Length(3), // peers
-        Constraint::Length(3), // block alert
+                Constraint::Length(3), // block alert
                 Constraint::Min(8),    // history
                 Constraint::Length(5), // help
             ])
@@ -41,24 +41,25 @@ impl Dashboard {
         self.render_chain_id(frame, chunks[1], metrics);
         self.render_block_height(frame, chunks[2], metrics);
         self.render_gas_price(frame, chunks[3], metrics);
-        self.render_peer_count(frame, chunks[4], metrics);
-    self.render_block_delay_alert(frame, chunks[5], metrics);
-    self.render_block_history(frame, chunks[6], metrics);
-    self.render_help(frame, chunks[7]);
+        self.render_block_delay_alert(frame, chunks[4], metrics);
+        self.render_block_history(frame, chunks[5], metrics);
+        self.render_help(frame, chunks[6]);
     }
 
-    fn render_connection_status(&self, frame: &mut Frame, area: Rect, metrics: &EthMetrics) {
+    fn render_connection_status(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
         let status_text = match &metrics.connection_status {
             ConnectionStatus::Connected => "Connected".to_string(),
             ConnectionStatus::Stale => "Stale".to_string(),
             ConnectionStatus::Disconnected => "Disconnected".to_string(),
             ConnectionStatus::Error(err) => format!("Error: {}", err),
         };
-        
+
         let status_style = match &metrics.connection_status {
             ConnectionStatus::Connected => Style::default().fg(Color::Green),
             ConnectionStatus::Stale => Style::default().fg(Color::Yellow),
-            ConnectionStatus::Disconnected | ConnectionStatus::Error(_) => Style::default().fg(Color::Red),
+            ConnectionStatus::Disconnected | ConnectionStatus::Error(_) => {
+                Style::default().fg(Color::Red)
+            }
         };
 
         let elapsed = metrics.last_updated.elapsed();
@@ -82,18 +83,21 @@ impl Dashboard {
         if matches!(metrics.connection_status, ConnectionStatus::Stale) {
             let threshold_secs = STALE_AFTER.as_secs();
             line_parts.push(Span::styled(" | Stale > ", Style::default()));
-            line_parts.push(Span::styled(format!("{}s", threshold_secs), Style::default().fg(Color::Yellow)));
+            line_parts.push(Span::styled(
+                format!("{}s", threshold_secs),
+                Style::default().fg(Color::Yellow),
+            ));
         }
 
         let content = vec![Line::from(line_parts)];
 
         let paragraph = Paragraph::new(content)
             .block(Block::default().title("Connection").borders(Borders::ALL));
-        
+
         frame.render_widget(paragraph, area);
     }
 
-    fn render_block_height(&self, frame: &mut Frame, area: Rect, metrics: &EthMetrics) {
+    fn render_block_height(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
         let block_text = match metrics.block_number {
             Some(block) => format!("{}", block),
             None => "N/A".to_string(),
@@ -103,8 +107,12 @@ impl Dashboard {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let age = metrics.latest_block_timestamp.map(|ts| now_secs.saturating_sub(ts));
-        let age_text = age.map(|a| format!("{}s ago", a)).unwrap_or("--".to_string());
+        let age = metrics
+            .latest_block_timestamp
+            .map(|ts| now_secs.saturating_sub(ts));
+        let age_text = age
+            .map(|a| format!("{}s ago", a))
+            .unwrap_or("--".to_string());
 
         let content = vec![Line::from(vec![
             Span::styled("Current Block: ", Style::default()),
@@ -116,11 +124,11 @@ impl Dashboard {
 
         let paragraph = Paragraph::new(content)
             .block(Block::default().title("Block Height").borders(Borders::ALL));
-        
+
         frame.render_widget(paragraph, area);
     }
 
-    fn render_gas_price(&self, frame: &mut Frame, area: Rect, metrics: &EthMetrics) {
+    fn render_gas_price(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
         let (gas_text, gas_gwei) = match metrics.gas_price {
             Some(gas) => {
                 let gwei = gas as f64 / 1_000_000_000.0;
@@ -139,28 +147,11 @@ impl Dashboard {
 
         let paragraph = Paragraph::new(content)
             .block(Block::default().title("Gas Price").borders(Borders::ALL));
-        
+
         frame.render_widget(paragraph, area);
     }
 
-    fn render_peer_count(&self, frame: &mut Frame, area: Rect, metrics: &EthMetrics) {
-        let peer_text = match metrics.peer_count {
-            Some(peers) => format!("{}", peers),
-            None => "N/A".to_string(),
-        };
-
-        let content = vec![Line::from(vec![
-            Span::styled("Connected Peers: ", Style::default()),
-            Span::styled(peer_text, Style::default().fg(Color::Magenta)),
-        ])];
-
-        let paragraph = Paragraph::new(content)
-            .block(Block::default().title("Network Peers").borders(Borders::ALL));
-        
-        frame.render_widget(paragraph, area);
-    }
-
-    fn render_chain_id(&self, frame: &mut Frame, area: Rect, metrics: &EthMetrics) {
+    fn render_chain_id(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
         let chain_text = match metrics.chain_id {
             Some(id) => format!("{}", id),
             None => "N/A".to_string(),
@@ -171,43 +162,71 @@ impl Dashboard {
             Span::styled(chain_text, Style::default().fg(Color::Blue)),
         ])];
 
-        let paragraph = Paragraph::new(content)
-            .block(Block::default().title("Network").borders(Borders::ALL));
+        let paragraph =
+            Paragraph::new(content).block(Block::default().title("Network").borders(Borders::ALL));
         frame.render_widget(paragraph, area);
     }
 
-    fn render_block_history(&self, frame: &mut Frame, area: Rect, metrics: &EthMetrics) {
+    fn render_block_history(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
         // Show newest first (already stored newest at front)
         let mut lines: Vec<Line> = Vec::new();
         for (idx, block) in metrics.block_history.iter().enumerate() {
-            if idx >= 50 { break; } // safety cap for rendering
-            let age_style = if idx == 0 { Style::default().fg(Color::Green) } else { Style::default().fg(Color::Gray) };
+            if idx >= 50 {
+                break;
+            } // safety cap for rendering
+            let age_style = if idx == 0 {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
             let num_span = Span::styled(format!("#{}", block.number), age_style);
-            let hash_short = if block.hash.len() > 10 { &block.hash[0..10] } else { &block.hash };
-            let hash_span = Span::styled(format!(" {}", hash_short), Style::default().fg(Color::Cyan));
-            let tx_span = Span::styled(format!(" tx:{}", block.tx_count), Style::default().fg(Color::Yellow));
-            let gas_ratio = if block.gas_limit > 0 { (block.gas_used as f64 / block.gas_limit as f64) * 100.0 } else { 0.0 };
-            let gas_span = Span::styled(format!(" gas:{:.0}%", gas_ratio), Style::default().fg(Color::Magenta));
+            let hash_short = if block.hash.len() > 10 {
+                &block.hash[0..10]
+            } else {
+                &block.hash
+            };
+            let hash_span =
+                Span::styled(format!(" {}", hash_short), Style::default().fg(Color::Cyan));
+            let tx_span = Span::styled(
+                format!(" tx:{}", block.tx_count),
+                Style::default().fg(Color::Yellow),
+            );
+            let gas_ratio = if block.gas_limit > 0 {
+                (block.gas_used as f64 / block.gas_limit as f64) * 100.0
+            } else {
+                0.0
+            };
+            let gas_span = Span::styled(
+                format!(" gas:{:.0}%", gas_ratio),
+                Style::default().fg(Color::Magenta),
+            );
             lines.push(Line::from(vec![num_span, hash_span, tx_span, gas_span]));
         }
 
         if lines.is_empty() {
-            lines.push(Line::from(Span::styled("(no blocks yet)", Style::default().fg(Color::DarkGray))));
+            lines.push(Line::from(Span::styled(
+                "(no blocks yet)",
+                Style::default().fg(Color::DarkGray),
+            )));
         }
 
-        let paragraph = Paragraph::new(lines)
-            .wrap(Wrap { trim: true })
-            .block(Block::default().title("Recent Blocks (newest first) ").borders(Borders::ALL));
+        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true }).block(
+            Block::default()
+                .title("Recent Blocks (newest first) ")
+                .borders(Borders::ALL),
+        );
         frame.render_widget(paragraph, area);
     }
 
-    fn render_block_delay_alert(&self, frame: &mut Frame, area: Rect, metrics: &EthMetrics) {
+    fn render_block_delay_alert(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
         // Determine delay
         let now_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let delay = metrics.latest_block_timestamp.map(|ts| now_secs.saturating_sub(ts));
+        let delay = metrics
+            .latest_block_timestamp
+            .map(|ts| now_secs.saturating_sub(ts));
         let threshold = metrics.block_delay_threshold;
         let exceeded = delay.map(|d| d > threshold).unwrap_or(false);
 
@@ -217,7 +236,8 @@ impl Dashboard {
                 Style::default().fg(Color::Red),
                 format!(
                     "No new block for {}s (threshold {}s). Network or node may be stalled.",
-                    delay.unwrap_or(0), threshold
+                    delay.unwrap_or(0),
+                    threshold
                 ),
             )
         } else {
@@ -226,14 +246,15 @@ impl Dashboard {
                 Style::default().fg(Color::Green),
                 format!(
                     "Last block {}s ago (threshold {}s).",
-                    delay.unwrap_or(0), threshold
+                    delay.unwrap_or(0),
+                    threshold
                 ),
             )
         };
 
         let content = vec![Line::from(vec![Span::styled(msg, style)])];
-        let paragraph = Paragraph::new(content)
-            .block(Block::default().title(title).borders(Borders::ALL));
+        let paragraph =
+            Paragraph::new(content).block(Block::default().title(title).borders(Borders::ALL));
         frame.render_widget(paragraph, area);
     }
 
@@ -251,9 +272,9 @@ impl Dashboard {
             ]),
         ];
 
-        let paragraph = Paragraph::new(help_text)
-            .block(Block::default().title("Help").borders(Borders::ALL));
-        
+        let paragraph =
+            Paragraph::new(help_text).block(Block::default().title("Help").borders(Borders::ALL));
+
         frame.render_widget(paragraph, area);
     }
 }

@@ -1,3 +1,4 @@
+mod config;
 mod data;
 mod ui;
 
@@ -32,7 +33,7 @@ struct Cli {
     rpc_url: String,
 
     /// Seconds before block delay alert is displayed
-    #[arg(default_value_t = data::BLOCK_DELAY_DEFAULT, env = "BLOCK_DELAY_SECS")]
+    #[arg(default_value_t = crate::config::BLOCK_DELAY_DEFAULT, env = "BLOCK_DELAY_SECS")]
     block_delay_secs: u64,
 }
 
@@ -142,8 +143,8 @@ fn print_help(program: &str) {
     println!("  -V, --version        Show version information and exit\n");
     println!("Description:");
     println!(
-        "  FutureSight is a terminal dashboard showing Ethereum RPC metrics: connection status, chain id, block\n  height, gas price, peer count, recent block history ({} entries), staleness & block delay alerts.",
-        data::MAX_BLOCK_HISTORY
+        "  FutureSight is a terminal dashboard showing Ethereum RPC metrics: connection status, chain id, block\n  height, gas price, recent block history ({} entries), staleness & block delay alerts.",
+    config::MAX_BLOCK_HISTORY
     );
     println!("Update Interval: 5s metrics poll.");
 }
