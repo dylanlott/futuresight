@@ -2,9 +2,11 @@ mod config;
 mod data;
 mod ui;
 
+use crate::data::Config;
 use data::MetricsCollector;
 use ui::Dashboard;
 
+use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -15,10 +17,10 @@ use std::{
     io::{Stdout, stdout},
     time::Duration,
 };
-use clap::Parser;
 use tokio::time;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
 type CrosstermTerminal = Terminal<CrosstermBackend<Stdout>>;
 
 #[derive(Parser, Debug)]
@@ -35,6 +37,9 @@ struct Cli {
     /// Seconds before block delay alert is displayed
     #[arg(default_value_t = crate::config::BLOCK_DELAY_DEFAULT, env = "BLOCK_DELAY_SECS")]
     block_delay_secs: u64,
+
+    #[arg(long, short, default_value_t = 5u64, env = "REFRESH_INTERVAL")]
+    refresh_interval: u64,
 }
 
 #[tokio::main]
@@ -56,18 +61,20 @@ async fn main() -> Result<()> {
     let mut terminal = setup_terminal()?;
     let mut dashboard = Dashboard::new();
 
-    let block_delay_threshold = cli.block_delay_secs;
-
     // create a metrics collector with the given configs
-    let mut collector = MetricsCollector::new(cli.rpc_url.clone(), block_delay_threshold);
+    let mut collector = MetricsCollector::new(Config {
+        rpc_url: cli.rpc_url.clone(),
+        block_delay_threshold: cli.block_delay_secs,
+    });
 
     // collect metrics at startup to prime the dashboard
     collector.collect_metrics().await;
 
     let mut last_update = std::time::Instant::now();
 
+    // Loop every
     loop {
-        if last_update.elapsed() >= Duration::from_secs(5) {
+        if last_update.elapsed() >= Duration::from_secs(cli.refresh_interval) {
             collector.collect_metrics().await;
             last_update = std::time::Instant::now();
         }
@@ -144,7 +151,7 @@ fn print_help(program: &str) {
     println!("Description:");
     println!(
         "  FutureSight is a terminal dashboard showing Ethereum RPC metrics: connection status, chain id, block\n  height, gas price, recent block history ({} entries), staleness & block delay alerts.",
-    config::MAX_BLOCK_HISTORY
+        config::MAX_BLOCK_HISTORY
     );
     println!("Update Interval: 5s metrics poll.");
 }

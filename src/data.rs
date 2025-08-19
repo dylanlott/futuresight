@@ -1,6 +1,6 @@
 use crate::config::{MAX_BACKFILL_PER_CYCLE, MAX_BLOCK_HISTORY, STALE_AFTER};
-use alloy_provider::Provider as ProviderTrait;
-use alloy_provider::RootProvider as AlloyProvider;
+use alloy::eips::eip4844::BlobTransactionSidecarItem;
+use alloy_provider::{Provider as ProviderTrait, RootProvider as AlloyProvider};
 use eyre::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -38,21 +38,28 @@ pub struct BlockInfo {
     pub tx_count: usize,
     pub gas_used: u64,
     pub gas_limit: u64,
+    pub blobs: Vec<BlobTransactionSidecarItem>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub rpc_url: String,
+    pub block_delay_threshold: u64,
 }
 
 impl SignetMetrics {
-    pub fn new(rpc_url: String, block_delay_threshold: u64) -> Self {
+    pub fn new(config: Config) -> Self {
         Self {
             block_number: None,
             gas_price: None,
             chain_id: None,
             last_updated: Instant::now(),
             last_successful: None,
-            rpc_url,
+            rpc_url: config.rpc_url,
             connection_status: ConnectionStatus::Disconnected,
             block_history: VecDeque::with_capacity(MAX_BLOCK_HISTORY),
             latest_block_timestamp: None,
-            block_delay_threshold,
+            block_delay_threshold: config.block_delay_threshold,
         }
     }
 }
@@ -99,6 +106,7 @@ impl SignetRpcClient {
             tx_count: block.transactions.len(),
             gas_used: block.header.gas_used,
             gas_limit: block.header.gas_limit,
+            blobs: vec![],
         })
     }
 }
@@ -109,11 +117,14 @@ pub struct MetricsCollector {
 }
 
 impl MetricsCollector {
-    pub fn new(rpc_url: String, block_delay_threshold: u64) -> Self {
-        let client = SignetRpcClient::new(rpc_url.clone()).unwrap();
+    pub fn new(config: Config) -> Self {
+        let client = SignetRpcClient::new(config.rpc_url.clone()).unwrap();
         Self {
             client: client,
-            metrics: SignetMetrics::new(rpc_url, block_delay_threshold),
+            metrics: SignetMetrics::new(Config {
+                rpc_url: config.rpc_url,
+                block_delay_threshold: config.block_delay_threshold,
+            }),
         }
     }
 
