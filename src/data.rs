@@ -19,6 +19,7 @@ pub struct SignetMetrics {
     pub block_history: VecDeque<BlockInfo>,
     pub latest_block_timestamp: Option<u64>, // unix seconds
     pub block_delay_threshold: u64,          // seconds
+    pub txpool: Option<TxPoolMetrics>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +61,7 @@ impl SignetMetrics {
             block_history: VecDeque::with_capacity(MAX_BLOCK_HISTORY),
             latest_block_timestamp: None,
             block_delay_threshold: config.block_delay_threshold,
+            txpool: None,
         }
     }
 }
@@ -114,6 +116,7 @@ impl SignetRpcClient {
 pub struct MetricsCollector {
     client: SignetRpcClient,
     metrics: SignetMetrics,
+    tx_client: Option<TxPoolClient>,
 }
 
 impl MetricsCollector {
@@ -125,7 +128,17 @@ impl MetricsCollector {
                 rpc_url: config.rpc_url,
                 block_delay_threshold: config.block_delay_threshold,
             }),
+            tx_client: None,
         }
+    }
+
+    /// Construct a collector with an optional tx-pool-webservice base URL.
+    pub fn new_with_txpool(config: Config, txpool_url: Option<String>) -> Self {
+        let mut s = Self::new(config);
+        if let Some(url) = txpool_url {
+            s.tx_client = Some(TxPoolClient::new(url));
+        }
+        s
     }
 
     pub async fn collect_metrics(&mut self) -> &SignetMetrics {
@@ -207,6 +220,16 @@ impl MetricsCollector {
         if matches!(self.metrics.connection_status, ConnectionStatus::Connected) {
             self.metrics.last_successful = Some(self.metrics.last_updated);
         }
+
+        // Tx-pool metrics (best-effort, does not affect RPC status)
+        if let Some(client) = &self.tx_client {
+            match client.fetch_metrics().await {
+                Ok(txm) => self.metrics.txpool = Some(txm),
+                Err(e) => {
+                    self.metrics.txpool = Some(TxPoolMetrics::with_error(e.to_string()));
+                }
+            }
+        }
         &self.metrics
     }
 
@@ -226,4 +249,131 @@ impl MetricsCollector {
             }
         }
     }
+}
+
+// ========================= TX-POOL SUPPORT =========================
+
+#[derive(Debug, Clone)]
+pub struct TxPoolMetrics {
+    pub healthy: bool,
+    pub last_updated: Instant,
+    pub error: Option<String>,
+    pub base_url: String,
+    pub transactions_cache: Option<u64>,
+    pub bundles_cache: Option<u64>,
+    pub signed_orders_cache: Option<u64>,
+}
+
+impl TxPoolMetrics {
+    pub fn new(base_url: String) -> Self {
+        Self {
+            healthy: false,
+            last_updated: Instant::now(),
+            error: None,
+            base_url,
+            transactions_cache: None,
+            bundles_cache: None,
+            signed_orders_cache: None,
+        }
+    }
+
+    pub fn with_error(err: String) -> Self {
+        Self {
+            healthy: false,
+            last_updated: Instant::now(),
+            error: Some(err),
+            base_url: "".to_string(),
+            transactions_cache: None,
+            bundles_cache: None,
+            signed_orders_cache: None,
+        }
+    }
+}
+
+pub struct TxPoolClient {
+    base_url: String,
+    http: reqwest::Client,
+}
+
+impl TxPoolClient {
+    pub fn new(base_url: String) -> Self {
+        Self {
+            base_url,
+            http: reqwest::Client::new(),
+        }
+    }
+
+    fn join_url(&self, path: &str) -> String {
+        format!("{}{}{}", self.base_url.trim_end_matches('/'), "/", path.trim_start_matches('/'))
+    }
+
+    async fn fetch_count_from(&self, path: &str) -> Result<Option<u64>> {
+        let url = self.join_url(path);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        let body = resp.text().await?;
+        let json: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(_) => return Ok(None),
+        };
+        Ok(count_items(&json))
+    }
+
+    pub async fn fetch_metrics(&self) -> Result<TxPoolMetrics> {
+        let mut out = TxPoolMetrics::new(self.base_url.clone());
+        out.last_updated = Instant::now();
+
+        // Fetch counts from endpoints. Do sequentially for simplicity/reliability.
+        // Endpoints: /transactions, /bundles, /signed-orders
+        let mut errors: Vec<String> = Vec::new();
+
+        match self.fetch_count_from("/transactions").await {
+            Ok(v) => out.transactions_cache = v,
+            Err(e) => errors.push(format!("transactions: {}", e)),
+        }
+
+        match self.fetch_count_from("/bundles").await {
+            Ok(v) => out.bundles_cache = v,
+            Err(e) => errors.push(format!("bundles: {}", e)),
+        }
+
+        match self.fetch_count_from("/signed-orders").await {
+            Ok(v) => out.signed_orders_cache = v,
+            Err(e) => errors.push(format!("signed-orders: {}", e)),
+        }
+
+        if errors.is_empty() {
+            out.healthy = true;
+        } else {
+            out.healthy = out.transactions_cache.is_some()
+                || out.bundles_cache.is_some()
+                || out.signed_orders_cache.is_some();
+            out.error = Some(errors.join(", "));
+        }
+
+        Ok(out)
+    }
+}
+
+fn count_items(v: &serde_json::Value) -> Option<u64> {
+    // Accept common container shapes
+    if let Some(arr) = v.as_array() {
+        return Some(arr.len() as u64);
+    }
+    if let Some(obj) = v.as_object() {
+        // Look for "items", "data", or pluralized keys
+        for key in ["items", "data", "transactions", "bundles", "signedOrders", "signed_orders"] {
+            if let Some(arr) = obj.get(key).and_then(|x| x.as_array()) {
+                return Some(arr.len() as u64);
+            }
+        }
+    }
+    None
 }

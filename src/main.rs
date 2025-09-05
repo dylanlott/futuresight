@@ -40,6 +40,10 @@ struct Cli {
 
     #[arg(long, short, default_value_t = 5u64, env = "REFRESH_INTERVAL")]
     refresh_interval: u64,
+
+    /// Base URL for tx-pool-webservice (example: http://localhost:8080)
+    #[arg(long, env = "TXPOOL_URL")]
+    txpool_url: Option<String>,
 }
 
 #[tokio::main]
@@ -56,16 +60,19 @@ async fn main() -> Result<()> {
         env!("CARGO_PKG_VERSION")
     );
     println!("=== Connecting to RPC URL: {} ===", cli.rpc_url);
+    if let Some(url) = &cli.txpool_url {
+        println!("=== Monitoring tx-pool-webservice: {} ===", url);
+    }
     println!("Press 'q' to quit. Use --help for options.");
 
     let mut terminal = setup_terminal()?;
     let mut dashboard = Dashboard::new();
 
     // create a metrics collector with the given configs
-    let mut collector = MetricsCollector::new(Config {
+    let mut collector = MetricsCollector::new_with_txpool(Config {
         rpc_url: cli.rpc_url.clone(),
         block_delay_threshold: cli.block_delay_secs,
-    });
+    }, cli.txpool_url.clone());
 
     // collect metrics at startup to prime the dashboard
     collector.collect_metrics().await;
@@ -145,12 +152,13 @@ fn print_help(program: &str) {
     println!(
         "  BLOCK_DELAY_SECS     Override block delay alert threshold when second arg omitted\n"
     );
+    println!("  TXPOOL_URL           Optional tx-pool-webservice base URL for cache metrics (e.g. http://localhost:8080)\n");
     println!("Flags:");
     println!("  -h, --help           Show this help and exit");
     println!("  -V, --version        Show version information and exit\n");
     println!("Description:");
     println!(
-        "  FutureSight is a terminal dashboard showing Ethereum RPC metrics: connection status, chain id, block\n  height, gas price, recent block history ({} entries), staleness & block delay alerts.",
+        "  FutureSight is a terminal dashboard showing Ethereum RPC metrics: connection status, chain id, block\n  height, gas price, recent block history ({} entries), staleness & block delay alerts. When TXPOOL_URL is set,\n  it also shows tx-pool-webservice cache metrics for transactions, bundles, and signed orders.",
         config::MAX_BLOCK_HISTORY
     );
     println!("Update Interval: 5s metrics poll.");

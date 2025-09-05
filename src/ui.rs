@@ -32,6 +32,7 @@ impl Dashboard {
                 Constraint::Length(3), // block
                 Constraint::Length(3), // gas
                 Constraint::Length(3), // block alert
+                Constraint::Length(6), // tx-pool
                 Constraint::Min(8),    // history
                 Constraint::Length(5), // help
             ])
@@ -41,9 +42,10 @@ impl Dashboard {
         self.render_chain_id(frame, chunks[1], metrics);
         self.render_block_height(frame, chunks[2], metrics);
         self.render_gas_price(frame, chunks[3], metrics);
-        self.render_block_delay_alert(frame, chunks[4], metrics);
-        self.render_block_history(frame, chunks[5], metrics);
-        self.render_help(frame, chunks[6]);
+    self.render_block_delay_alert(frame, chunks[4], metrics);
+    self.render_txpool(frame, chunks[5], metrics);
+    self.render_block_history(frame, chunks[6], metrics);
+    self.render_help(frame, chunks[7]);
     }
 
     fn render_connection_status(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
@@ -256,6 +258,74 @@ impl Dashboard {
         let paragraph =
             Paragraph::new(content).block(Block::default().title(title).borders(Borders::ALL));
         frame.render_widget(paragraph, area);
+    }
+
+    fn render_txpool(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
+        let title = "Tx Pool";
+        if let Some(tp) = &metrics.txpool {
+            let health_style = if tp.healthy {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::Red)
+            };
+            let updated = tp.last_updated.elapsed();
+            let updated_text = if updated < Duration::from_secs(1) {
+                "< 1s ago".to_string()
+            } else {
+                format!("{}s ago", updated.as_secs())
+            };
+
+            let mut line1 = vec![
+                Span::styled("Health: ", Style::default()),
+                Span::styled(if tp.healthy { "OK" } else { "Down" }, health_style),
+                Span::raw(" | URL: "),
+                Span::styled(&tp.base_url, Style::default().fg(Color::Cyan)),
+                Span::raw(" | Updated: "),
+                Span::styled(updated_text, Style::default().fg(Color::Yellow)),
+            ];
+            if let Some(err) = &tp.error {
+                line1.push(Span::raw(" | Error: "));
+                line1.push(Span::styled(err, Style::default().fg(Color::Red)));
+            }
+
+            let mut lines = vec![Line::from(line1)];
+
+            let tx = tp
+                .transactions_cache
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "N/A".to_string());
+            let bundles = tp
+                .bundles_cache
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "N/A".to_string());
+            let orders = tp
+                .signed_orders_cache
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "N/A".to_string());
+
+            lines.push(Line::from(vec![
+                Span::styled("Transactions: ", Style::default()),
+                Span::styled(tx, Style::default().fg(Color::Green)),
+                Span::raw("  |  Bundles: "),
+                Span::styled(bundles, Style::default().fg(Color::Magenta)),
+                Span::raw("  |  Signed Orders: "),
+                Span::styled(orders, Style::default().fg(Color::Blue)),
+            ]));
+
+            let paragraph = Paragraph::new(lines)
+                .block(Block::default().title(title).borders(Borders::ALL));
+            frame.render_widget(paragraph, area);
+        } else {
+            let lines = vec![Line::from(vec![
+                Span::styled(
+                    "Set TXPOOL_URL to enable tx-pool-webservice metrics.",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])];
+            let paragraph = Paragraph::new(lines)
+                .block(Block::default().title(title).borders(Borders::ALL));
+            frame.render_widget(paragraph, area);
+        }
     }
 
     fn render_help(&self, frame: &mut Frame, area: Rect) {

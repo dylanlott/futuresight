@@ -18,6 +18,7 @@ FutureSight currently displays the following data:
 - **Block Height**: Displays the latest block number from the network
 - **Gas Price**: Current gas price displayed in gwei and wei
 - **Alerts**: Stale connection and block delay warnings
+ - **Tx Pool (optional)**: If a tx-pool-webservice is configured, shows health and cache sizes for Transactions, Bundles, and Signed Orders
 
 ## Installation
 
@@ -37,7 +38,12 @@ cargo build --release && cargo run
 
 ```bash
 # equivalent to make run
-cargo run -- https://rpc.pecorino.signet.sh 30 
+cargo run -- http://rpc.pecorino.signet.sh 30 
+
+# with tx-pool-webservice metrics (fetches JSON from /transactions, /bundles, /signed-orders)
+TXPOOL_URL=http://localhost:8080 cargo run
+# or
+cargo run -- --txpool-url http://localhost:8080
 ```
 
 ### Make Commands
@@ -56,6 +62,29 @@ make test         # run tests
 ### Controls
 
 - **q** or **Esc**: Quit the application
+
+### Configuration
+
+You can configure FutureSight via CLI flags or environment variables.
+
+- RPC URL
+	- Positional arg: `cargo run -- <RPC_URL>`
+	- Env: `RPC_URL=http://...`
+	- Default: `http://rpc.pecorino.signet.sh`
+- Block delay alert threshold (seconds)
+	- Positional arg: `cargo run -- <RPC_URL> <BLOCK_DELAY_SECS>`
+	- Flag/env: `--block-delay-secs <N>` or `BLOCK_DELAY_SECS=<N>`
+	- Default: `60`
+- Refresh interval (seconds)
+	- Flag/env: `-r, --refresh-interval <N>` or `REFRESH_INTERVAL=<N>`
+	- Default: `5`
+- Tx-pool-webservice integration
+	- Flag/env: `--txpool-url <URL>` or `TXPOOL_URL=<URL>`
+	- FutureSight requests JSON from `<URL>/transactions`, `<URL>/bundles`, and `<URL>/signed-orders` and computes counts from the returned items.
+	- The dashboard shows: health, last update, and item counts for Transactions, Bundles, and Signed Orders.
+
+Notes:
+- The endpoints should return arrays or an object containing an array property (e.g., `items`, `data`, `transactions`, `bundles`, `signedOrders`, `signed_orders`). FutureSight counts the items accordingly.
 
 ## License
 
