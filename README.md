@@ -78,6 +78,9 @@ You can configure FutureSight via CLI flags or environment variables.
 - Refresh interval (seconds)
 	- Flag/env: `-r, --refresh-interval <N>` or `REFRESH_INTERVAL=<N>`
 	- Default: `5`
+- Max block history (entries kept/displayed)
+	- Flag/env: `--max-block-history <N>` or `MAX_BLOCK_HISTORY=<N>`
+	- Default: `20`
 - Tx-pool-webservice integration
 	- Flag/env: `--txpool-url <URL>` or `TXPOOL_URL=<URL>`
 	- FutureSight requests JSON from `<URL>/transactions`, `<URL>/bundles`, and `<URL>/signed-orders` and computes counts from the returned items.

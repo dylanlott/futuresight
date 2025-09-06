@@ -1,4 +1,4 @@
-use crate::config::{MAX_BACKFILL_PER_CYCLE, MAX_BLOCK_HISTORY, STALE_AFTER};
+use crate::config::{MAX_BACKFILL_PER_CYCLE, STALE_AFTER};
 use alloy::eips::eip4844::BlobTransactionSidecarItem;
 use alloy_provider::{Provider as ProviderTrait, RootProvider as AlloyProvider};
 use eyre::Result;
@@ -17,6 +17,7 @@ pub struct SignetMetrics {
     pub rpc_url: String,
     pub connection_status: ConnectionStatus,
     pub block_history: VecDeque<BlockInfo>,
+    pub max_block_history: usize,
     pub latest_block_timestamp: Option<u64>, // unix seconds
     pub block_delay_threshold: u64,          // seconds
     pub txpool: Option<TxPoolMetrics>,
@@ -46,6 +47,7 @@ pub struct BlockInfo {
 pub struct Config {
     pub rpc_url: String,
     pub block_delay_threshold: u64,
+    pub max_block_history: usize,
 }
 
 impl SignetMetrics {
@@ -58,7 +60,8 @@ impl SignetMetrics {
             last_successful: None,
             rpc_url: config.rpc_url,
             connection_status: ConnectionStatus::Disconnected,
-            block_history: VecDeque::with_capacity(MAX_BLOCK_HISTORY),
+            block_history: VecDeque::with_capacity(config.max_block_history),
+            max_block_history: config.max_block_history,
             latest_block_timestamp: None,
             block_delay_threshold: config.block_delay_threshold,
             txpool: None,
@@ -123,10 +126,11 @@ impl MetricsCollector {
     pub fn new(config: Config) -> Self {
         let client = SignetRpcClient::new(config.rpc_url.clone()).unwrap();
         Self {
-            client: client,
+            client,
             metrics: SignetMetrics::new(Config {
                 rpc_url: config.rpc_url,
                 block_delay_threshold: config.block_delay_threshold,
+                max_block_history: config.max_block_history,
             }),
             tx_client: None,
         }
@@ -196,7 +200,7 @@ impl MetricsCollector {
                             self.metrics.latest_block_timestamp = Some(ts);
                         }
                         self.metrics.block_history.push_front(block);
-                        while self.metrics.block_history.len() > MAX_BLOCK_HISTORY {
+                        while self.metrics.block_history.len() > self.metrics.max_block_history {
                             self.metrics.block_history.pop_back();
                         }
                     }

@@ -44,6 +44,10 @@ struct Cli {
     /// Base URL for tx-pool-webservice (example: http://localhost:8080)
     #[arg(long, env = "TXPOOL_URL")]
     txpool_url: Option<String>,
+
+    /// Number of recent blocks to keep in memory/display
+    #[arg(long = "max-block-history", env = "MAX_BLOCK_HISTORY", default_value_t = crate::config::DEFAULT_MAX_BLOCK_HISTORY)]
+    max_block_history: usize,
 }
 
 #[tokio::main]
@@ -72,6 +76,7 @@ async fn main() -> Result<()> {
     let mut collector = MetricsCollector::new_with_txpool(Config {
         rpc_url: cli.rpc_url.clone(),
         block_delay_threshold: cli.block_delay_secs,
+        max_block_history: cli.max_block_history,
     }, cli.txpool_url.clone());
 
     // collect metrics at startup to prime the dashboard
@@ -148,18 +153,23 @@ fn print_help(program: &str) {
     println!(
         "  BLOCK_DELAY_SECS     Seconds before block delay alert (default: 60 or env BLOCK_DELAY_SECS)\n"
     );
+    println!("Options:");
+    println!(
+        "  --max-block-history N  Number of recent blocks to keep (default: {} or env MAX_BLOCK_HISTORY)\n",
+        crate::config::DEFAULT_MAX_BLOCK_HISTORY
+    );
     println!("Environment:");
     println!(
         "  BLOCK_DELAY_SECS     Override block delay alert threshold when second arg omitted\n"
     );
+    println!("  MAX_BLOCK_HISTORY     Configure how many recent blocks to keep and display\n");
     println!("  TXPOOL_URL           Optional tx-pool-webservice base URL for cache metrics (e.g. http://localhost:8080)\n");
     println!("Flags:");
     println!("  -h, --help           Show this help and exit");
     println!("  -V, --version        Show version information and exit\n");
     println!("Description:");
     println!(
-        "  FutureSight is a terminal dashboard showing Ethereum RPC metrics: connection status, chain id, block\n  height, gas price, recent block history ({} entries), staleness & block delay alerts. When TXPOOL_URL is set,\n  it also shows tx-pool-webservice cache metrics for transactions, bundles, and signed orders.",
-        config::MAX_BLOCK_HISTORY
+        "  FutureSight is a terminal dashboard showing Ethereum RPC metrics: connection status, chain id, block\n  height, gas price, recent block history (configurable entries), staleness & block delay alerts. When TXPOOL_URL is set,\n  it also shows tx-pool-webservice cache metrics for transactions, bundles, and signed orders."
     );
     println!("Update Interval: 5s metrics poll.");
 }
