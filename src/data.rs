@@ -126,7 +126,7 @@ impl MetricsCollector {
     pub fn new(config: Config) -> Self {
         let client = SignetRpcClient::new(config.rpc_url.clone()).unwrap();
         Self {
-            client,
+            client: client,
             metrics: SignetMetrics::new(Config {
                 rpc_url: config.rpc_url,
                 block_delay_threshold: config.block_delay_threshold,
@@ -141,6 +141,10 @@ impl MetricsCollector {
         let mut s = Self::new(config);
         if let Some(url) = txpool_url {
             s.tx_client = Some(TxPoolClient::new(url));
+        } else {
+            s.tx_client = Some(TxPoolClient::new(
+                "https://transactions.pecorino.signet.sh/".to_string(),
+            ));
         }
         s
     }
@@ -224,7 +228,6 @@ impl MetricsCollector {
         if matches!(self.metrics.connection_status, ConnectionStatus::Connected) {
             self.metrics.last_successful = Some(self.metrics.last_updated);
         }
-
         // Tx-pool metrics (best-effort, does not affect RPC status)
         if let Some(client) = &self.tx_client {
             match client.fetch_metrics().await {
@@ -308,16 +311,17 @@ impl TxPoolClient {
     }
 
     fn join_url(&self, path: &str) -> String {
-        format!("{}{}{}", self.base_url.trim_end_matches('/'), "/", path.trim_start_matches('/'))
+        format!(
+            "{}{}{}",
+            self.base_url.trim_end_matches('/'),
+            "/",
+            path.trim_start_matches('/')
+        )
     }
 
     async fn fetch_count_from(&self, path: &str) -> Result<Option<u64>> {
         let url = self.join_url(path);
-        let resp = self
-            .http
-            .get(&url)
-            .send()
-            .await?;
+        let resp = self.http.get(&url).send().await?;
 
         if !resp.status().is_success() {
             return Ok(None);
@@ -373,7 +377,14 @@ fn count_items(v: &serde_json::Value) -> Option<u64> {
     }
     if let Some(obj) = v.as_object() {
         // Look for "items", "data", or pluralized keys
-        for key in ["items", "data", "transactions", "bundles", "signedOrders", "signed_orders"] {
+        for key in [
+            "items",
+            "data",
+            "transactions",
+            "bundles",
+            "signedOrders",
+            "signed_orders",
+        ] {
             if let Some(arr) = obj.get(key).and_then(|x| x.as_array()) {
                 return Some(arr.len() as u64);
             }

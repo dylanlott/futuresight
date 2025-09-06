@@ -73,11 +73,14 @@ async fn main() -> Result<()> {
     let mut dashboard = Dashboard::new();
 
     // create a metrics collector with the given configs
-    let mut collector = MetricsCollector::new_with_txpool(Config {
-        rpc_url: cli.rpc_url.clone(),
-        block_delay_threshold: cli.block_delay_secs,
-        max_block_history: cli.max_block_history,
-    }, cli.txpool_url.clone());
+    let mut collector = MetricsCollector::new_with_txpool(
+        Config {
+            rpc_url: cli.rpc_url.clone(),
+            block_delay_threshold: cli.block_delay_secs,
+            max_block_history: cli.max_block_history,
+        },
+        cli.txpool_url.clone(),
+    );
 
     // collect metrics at startup to prime the dashboard
     collector.collect_metrics().await;
@@ -163,7 +166,9 @@ fn print_help(program: &str) {
         "  BLOCK_DELAY_SECS     Override block delay alert threshold when second arg omitted\n"
     );
     println!("  MAX_BLOCK_HISTORY     Configure how many recent blocks to keep and display\n");
-    println!("  TXPOOL_URL           Optional tx-pool-webservice base URL for cache metrics (e.g. http://localhost:8080)\n");
+    println!(
+        "  TXPOOL_URL           Optional tx-pool-webservice base URL for cache metrics (e.g. http://localhost:8080)\n"
+    );
     println!("Flags:");
     println!("  -h, --help           Show this help and exit");
     println!("  -V, --version        Show version information and exit\n");
