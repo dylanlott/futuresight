@@ -13,7 +13,7 @@ help:
 	@echo "------------------------"
 	@echo "  make build          - Build debug binary"
 	@echo "  make release        - Build optimized release binary"
-	@echo "  make run            - Run (debug) with optional RPC_URL and BLOCK_DELAY_SECS env vars"
+	@echo "  make run            - Run (debug) with optional RPC_URL, MAX_BLOCK_HISTORY, and BLOCK_DELAY_SECS env vars"
 	@echo "  make dev            - Run with cargo watch (requires cargo-watch)"
 	@echo "  make test           - Run tests (none yet)"
 	@echo "  make watch          - Runs FutureSight with cargo-watch; Requires cargo-watch to be installed"
