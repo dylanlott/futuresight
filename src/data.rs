@@ -1,4 +1,4 @@
-use crate::config::{MAX_BACKFILL_PER_CYCLE, STALE_AFTER};
+use crate::config::{MAX_BACKFILL_PER_CYCLE, STALE_AFTER, FEE_HISTORY_BLOCKS, FEE_HISTORY_PERCENTILES, SUGGESTION_RAMP_FACTOR};
 use alloy::eips::eip4844::BlobTransactionSidecarItem;
 use alloy_provider::{Provider as ProviderTrait, RootProvider as AlloyProvider};
 use eyre::Result;
@@ -6,6 +6,37 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::time::Instant;
 use url::Url;
+// new: raw HTTP for eth_feeHistory gaps
+use reqwest;
+
+// ========================= GAS TRACKING HELPERS =========================
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default)]
+pub struct SuggestedFeeTier {
+    pub max_fee_per_gas: u128,          // wei
+    pub max_priority_fee_per_gas: u128, // wei
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default)]
+pub struct SuggestedFees {
+    pub safe: SuggestedFeeTier,
+    pub standard: SuggestedFeeTier,
+    pub fast: SuggestedFeeTier,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default)]
+pub struct FeeHistoryMetrics {
+    pub oldest_block: u64,
+    pub block_count: u64,
+    pub base_fees: Vec<u128>,                  // wei per block
+    pub gas_used_ratios: Vec<f64>,             // 0..=100 per block
+    pub reward_percentiles: Vec<(u8, Vec<u128>)>, // (percentile, rewards per block in wei)
+}
+
+// ========================= METRICS MODEL =========================
 
 #[derive(Debug, Clone)]
 pub struct SignetMetrics {
@@ -21,6 +52,23 @@ pub struct SignetMetrics {
     pub latest_block_timestamp: Option<u64>, // unix seconds
     pub block_delay_threshold: u64,          // seconds
     pub txpool: Option<TxPoolMetrics>,
+
+    // Gas tracking (EIP-1559)
+    pub base_fee_per_gas: Option<u128>,       // wei
+    pub next_base_fee_per_gas: Option<u128>,  // wei
+    pub max_priority_fee_suggested: Option<u128>, // wei
+    pub suggested_fees: Option<SuggestedFees>,
+    pub fee_history: Option<FeeHistoryMetrics>,
+    pub gas_utilization_ma_n: Option<f64>, // percent 0..=100
+    pub gas_volatility_5m: Option<f64>,    // relative pct vs MA
+
+    // EIP-4844 (optional)
+    #[allow(dead_code)]
+    pub blob_base_fee: Option<u128>,
+    #[allow(dead_code)]
+    pub blob_base_fee_next: Option<u128>,
+    #[allow(dead_code)]
+    pub blob_gas_utilization_ma_n: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,6 +89,11 @@ pub struct BlockInfo {
     pub gas_used: u64,
     pub gas_limit: u64,
     pub blobs: Vec<BlobTransactionSidecarItem>,
+
+    // header-derived gas fields
+    pub base_fee_per_gas: Option<u128>, // 1559
+    pub blob_gas_used: Option<u64>,     // 4844 (if available)
+    pub excess_blob_gas: Option<u64>,   // 4844 (if available)
 }
 
 #[derive(Debug, Clone)]
@@ -65,19 +118,37 @@ impl SignetMetrics {
             latest_block_timestamp: None,
             block_delay_threshold: config.block_delay_threshold,
             txpool: None,
+
+            // init gas fields
+            base_fee_per_gas: None,
+            next_base_fee_per_gas: None,
+            max_priority_fee_suggested: None,
+            suggested_fees: None,
+            fee_history: None,
+            gas_utilization_ma_n: None,
+            gas_volatility_5m: None,
+            blob_base_fee: None,
+            blob_base_fee_next: None,
+            blob_gas_utilization_ma_n: None,
         }
     }
 }
 
 pub struct SignetRpcClient {
     provider: AlloyProvider,
+    rpc_url: String,
+    http: reqwest::Client,
 }
 
 impl SignetRpcClient {
     pub fn new(rpc_url: String) -> Result<Self> {
         let url = Url::parse(&rpc_url)?;
         let provider = AlloyProvider::new_http(url);
-        Ok(Self { provider })
+        Ok(Self {
+            provider,
+            rpc_url,
+            http: reqwest::Client::new(),
+        })
     }
 
     pub async fn get_block_number(&self) -> Result<u64> {
@@ -103,6 +174,11 @@ impl SignetRpcClient {
             .await?
             .ok_or_else(|| eyre::eyre!("block not found"))?;
 
+        // Best-effort header-derived gas fields (may be None on pre-1559/4844)
+    let base_fee_per_gas = block.header.base_fee_per_gas.map(|v| v as u128);
+        let blob_gas_used = None;
+        let excess_blob_gas = None;
+
         Ok(BlockInfo {
             number: block.number(),
             hash: block.hash().to_string(),
@@ -112,8 +188,65 @@ impl SignetRpcClient {
             gas_used: block.header.gas_used,
             gas_limit: block.header.gas_limit,
             blobs: vec![],
+
+            base_fee_per_gas,
+            blob_gas_used,
+            excess_blob_gas,
         })
     }
+
+    pub async fn get_fee_history(
+        &self,
+        block_count: u64,
+        newest: &str,               // "latest" or hex
+        reward_percentiles: &[f64], // 0..=100
+    ) -> Result<EthFeeHistoryResult> {
+        let params = serde_json::json!([
+            to_hex_qty(block_count),
+            newest,
+            reward_percentiles
+        ]);
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "eth_feeHistory",
+            "params": params
+        });
+        let resp = self.http.post(&self.rpc_url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            return Err(eyre::eyre!(format!("eth_feeHistory HTTP {}", resp.status())));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        if let Some(err) = v.get("error") {
+            return Err(eyre::eyre!(format!("eth_feeHistory error: {}", err)));
+        }
+        let res: EthFeeHistoryResult = serde_json::from_value(v["result"].clone())?;
+        Ok(res)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EthFeeHistoryResult {
+    pub oldest_block: String,
+    #[serde(default)]
+    pub base_fee_per_gas: Vec<String>, // hex; length blockCount+1
+    #[serde(default)]
+    pub gas_used_ratio: Vec<f64>, // 0..=1 length blockCount
+    #[serde(default)]
+    pub reward: Vec<Vec<String>>, // [blockCount][percentiles]
+}
+
+fn to_hex_qty(n: u64) -> String {
+    format!("0x{:x}", n)
+}
+fn hex_to_u64(s: &str) -> Option<u64> {
+    let t = s.trim_start_matches("0x");
+    u64::from_str_radix(t, 16).ok()
+}
+fn hex_to_u128(s: &str) -> Option<u128> {
+    let t = s.trim_start_matches("0x");
+    u128::from_str_radix(t, 16).ok()
 }
 
 pub struct MetricsCollector {
@@ -220,6 +353,104 @@ impl MetricsCollector {
                 .map(|g| self.metrics.gas_price = Some(g))
             {
                 status = ConnectionStatus::Error(format!("Gas price: {}", e));
+            }
+
+            // Fee history polling (best-effort)
+            match self
+                .client
+                .get_fee_history(FEE_HISTORY_BLOCKS, "latest", &FEE_HISTORY_PERCENTILES)
+                .await
+            {
+                Ok(h) => {
+                    // parse base fees and next base
+                    let mut base_fees: Vec<u128> = Vec::with_capacity(h.base_fee_per_gas.len());
+                    for hf in &h.base_fee_per_gas {
+                        if let Some(v) = hex_to_u128(hf) {
+                            base_fees.push(v);
+                        }
+                    }
+                    let (current_base_fee, next_base_fee) = if base_fees.len() >= 2 {
+                        (
+                            Some(base_fees[base_fees.len() - 2]),
+                            Some(base_fees[base_fees.len() - 1]),
+                        )
+                    } else {
+                        (base_fees.last().copied(), None)
+                    };
+                    self.metrics.base_fee_per_gas = current_base_fee;
+                    self.metrics.next_base_fee_per_gas = next_base_fee;
+
+                    // gas used ratios -> percent
+                    let gas_used_ratios: Vec<f64> = h.gas_used_ratio.iter().map(|r| r * 100.0).collect();
+                    let utilization_ma = if gas_used_ratios.is_empty() {
+                        None
+                    } else {
+                        Some(gas_used_ratios.iter().sum::<f64>() / gas_used_ratios.len() as f64)
+                    };
+                    self.metrics.gas_utilization_ma_n = utilization_ma;
+
+                    // volatility: latest vs avg (exclude next)
+                    self.metrics.gas_volatility_5m = if base_fees.len() >= 2 {
+                        let sample = &base_fees[..base_fees.len() - 1];
+                        let avg = sample.iter().map(|&x| x as f64).sum::<f64>() / sample.len() as f64;
+                        let cur = sample.last().copied().unwrap_or(0) as f64;
+                        if avg > 0.0 { Some((cur - avg) / avg) } else { None }
+                    } else { None };
+
+                    // reward percentiles -> series
+                    let block_count = h.gas_used_ratio.len() as u64;
+                    let mut reward_perc: Vec<(u8, Vec<u128>)> = Vec::new();
+                    for (pi, pct) in FEE_HISTORY_PERCENTILES.iter().enumerate() {
+                        let mut series: Vec<u128> = Vec::with_capacity(h.reward.len());
+                        for row in &h.reward {
+                            if let Some(hexv) = row.get(pi) {
+                                if let Some(v) = hex_to_u128(hexv) { series.push(v); }
+                            }
+                        }
+                        reward_perc.push((*pct as u8, series));
+                    }
+
+                    // suggestions from last block percentiles
+                    let last_idx = if block_count > 0 { (block_count - 1) as usize } else { 0 };
+                    let pick_priority = |target: f64| -> Option<u128> {
+                        let idx = FEE_HISTORY_PERCENTILES.iter().position(|p| (*p - target).abs() < f64::EPSILON)?;
+                        h.reward.get(last_idx).and_then(|row| row.get(idx)).and_then(|hexv| hex_to_u128(hexv))
+                    };
+                    let prio_safe = pick_priority(25.0).or_else(|| pick_priority(10.0)).or_else(|| pick_priority(50.0));
+                    let prio_std  = pick_priority(50.0).or(prio_safe);
+                    let prio_fast = pick_priority(75.0).or_else(|| pick_priority(90.0)).or(prio_std);
+
+                    let mk = |prio: Option<u128>| -> SuggestedFeeTier {
+                        if let (Some(p), Some(next)) = (prio, self.metrics.next_base_fee_per_gas) {
+                            let max_fee = next.saturating_add(((p as f64) * SUGGESTION_RAMP_FACTOR) as u128);
+                            SuggestedFeeTier { max_fee_per_gas: max_fee, max_priority_fee_per_gas: p }
+                        } else { SuggestedFeeTier::default() }
+                    };
+                    self.metrics.suggested_fees = Some(SuggestedFees { safe: mk(prio_safe), standard: mk(prio_std), fast: mk(prio_fast) });
+
+                    self.metrics.fee_history = Some(FeeHistoryMetrics {
+                        oldest_block: hex_to_u64(&h.oldest_block).unwrap_or(0),
+                        block_count,
+                        base_fees,
+                        gas_used_ratios,
+                        reward_percentiles: reward_perc,
+                    });
+                }
+                Err(_e) => {
+                    // null out dependent fields, don't change status
+                    self.metrics.fee_history = None;
+                    self.metrics.base_fee_per_gas = None;
+                    self.metrics.next_base_fee_per_gas = None;
+                    self.metrics.suggested_fees = None;
+                    self.metrics.gas_utilization_ma_n = None;
+                    self.metrics.gas_volatility_5m = None;
+                }
+            }
+
+            // RPC-suggested maxPriorityFeePerGas (best-effort)
+            match self.client.provider.get_max_priority_fee_per_gas().await {
+                Ok(p) => self.metrics.max_priority_fee_suggested = Some(p),
+                Err(_) => self.metrics.max_priority_fee_suggested = None,
             }
         }
 
