@@ -31,19 +31,28 @@ type CrosstermTerminal = Terminal<CrosstermBackend<Stdout>>;
 )]
 struct Cli {
     /// Ethereum JSON-RPC endpoint
-    #[arg(default_value = "http://rpc.pecorino.signet.sh", env = "RPC_URL")]
+    #[arg(default_value = "http://rpc.parmigiana.signet.sh", env = "RPC_URL")]
     rpc_url: String,
 
     /// Seconds before block delay alert is displayed
     #[arg(default_value_t = crate::config::BLOCK_DELAY_DEFAULT, env = "BLOCK_DELAY_SECS")]
     block_delay_secs: u64,
 
-    #[arg(long, short, default_value_t = 5u64, env = "REFRESH_INTERVAL")]
+    /// How often metric data is refreshed
+    #[arg(long, short, default_value_t = crate::config::DEFAULT_REFRESH_INTERVAL, env = "REFRESH_INTERVAL")]
     refresh_interval: u64,
 
     /// Base URL for tx-pool-webservice (example: http://localhost:8080)
     #[arg(long, env = "TXPOOL_URL")]
     txpool_url: Option<String>,
+
+    /// Maximum number of tx-pool transactions to keep and display
+    #[arg(long = "txpool-max-rows", env = "TXPOOL_MAX_ROWS", default_value_t = crate::config::DEFAULT_TXPOOL_MAX_ROWS)]
+    txpool_max_rows: usize,
+
+    /// Disable fetching and displaying tx list from tx-pool
+    #[arg(long = "no-txpool-list", default_value_t = false)]
+    txpool_disable_list: bool,
 
     /// Number of recent blocks to keep in memory/display
     #[arg(long = "max-block-history", env = "MAX_BLOCK_HISTORY", default_value_t = crate::config::DEFAULT_MAX_BLOCK_HISTORY)]
@@ -78,6 +87,8 @@ async fn main() -> Result<()> {
             rpc_url: cli.rpc_url.clone(),
             block_delay_threshold: cli.block_delay_secs,
             max_block_history: cli.max_block_history,
+            txpool_max_rows: cli.txpool_max_rows,
+            txpool_fetch_list: !cli.txpool_disable_list,
         },
         cli.txpool_url.clone(),
     );

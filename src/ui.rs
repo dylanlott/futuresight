@@ -8,10 +8,64 @@ use ratatui::{
 use std::time::Duration;
 
 use crate::config::{STALE_AFTER, GAS_ALERT_HIGH_GWEI, GAS_SPIKE_MULTIPLIER};
-use crate::data::{ConnectionStatus, SignetMetrics};
+use crate::data::{ConnectionStatus, SignetMetrics, TxPoolTx};
+use alloy::primitives::{Address, B256, U256};
 
 pub struct Dashboard {
     pub should_quit: bool,
+}
+
+fn short_hash(h: &B256) -> String {
+    let s = format!("{:#x}", h);
+    if s.len() > 10 {
+        s[..10].to_string()
+    } else {
+        s
+    }
+}
+
+fn short_addr(a: &Address) -> String {
+    let s = format!("{:#x}", a);
+    if s.len() > 10 {
+        s[..10].to_string()
+    } else {
+        s
+    }
+}
+
+fn fmt_gwei_opt(wei: Option<u128>) -> String {
+    match wei {
+        Some(v) => {
+            let g = (v as f64) / 1_000_000_000.0;
+            if g >= 100.0 {
+                format!("{:.0} g", g)
+            } else {
+                format!("{:.1} g", g)
+            }
+        }
+        None => "N/A".to_string(),
+    }
+}
+
+fn fmt_eth_short(v: &U256) -> String {
+    let wei: u128 = v.to::<u128>();
+    let eth = (wei as f64) / 1_000_000_000_000_000_000.0;
+    if eth >= 1.0 {
+        format!("{:.4} ETH", eth)
+    } else {
+        format!("{:.6} ETH", eth)
+    }
+}
+
+fn fmt_tx_fee_gwei(tx: &TxPoolTx) -> String {
+    if let Some(max_fee) = tx.max_fee_per_gas {
+        let prio = tx.max_priority_fee_per_gas.unwrap_or(0);
+        format!("{}/{}", fmt_gwei_opt(Some(max_fee)), fmt_gwei_opt(Some(prio)))
+    } else if let Some(gp) = tx.gas_price {
+        fmt_gwei_opt(Some(gp))
+    } else {
+        "N/A".to_string()
+    }
 }
 
 impl Dashboard {
@@ -32,9 +86,10 @@ impl Dashboard {
                 Constraint::Length(3), // block
                 Constraint::Length(7), // gas (expanded)
                 Constraint::Length(3), // block alert
-                Constraint::Length(6), // tx-pool
-                Constraint::Min(8),    // history
-                Constraint::Length(5), // help
+                Constraint::Length(4), // tx-pool summary
+                Constraint::Length(9), // tx list
+                Constraint::Min(6),    // history
+                Constraint::Length(4), // help
             ])
             .split(frame.area());
 
@@ -44,8 +99,9 @@ impl Dashboard {
         self.render_gas_price(frame, chunks[3], metrics);
     self.render_block_delay_alert(frame, chunks[4], metrics);
     self.render_txpool(frame, chunks[5], metrics);
-    self.render_block_history(frame, chunks[6], metrics);
-    self.render_help(frame, chunks[7]);
+    self.render_txpool_transactions(frame, chunks[6], metrics);
+    self.render_block_history(frame, chunks[7], metrics);
+    self.render_help(frame, chunks[8]);
     }
 
     fn render_connection_status(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
@@ -416,6 +472,90 @@ impl Dashboard {
             let lines = vec![Line::from(vec![
                 Span::styled(
                     "Set TXPOOL_URL to enable tx-pool-webservice metrics.",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])];
+            let paragraph = Paragraph::new(lines)
+                .block(Block::default().title(title).borders(Borders::ALL));
+            frame.render_widget(paragraph, area);
+        }
+    }
+
+    fn render_txpool_transactions(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
+        let title = "Tx Pool Transactions";
+        if let Some(tp) = &metrics.txpool {
+            let mut lines: Vec<Line> = Vec::new();
+            if let Some(err) = &tp.error {
+                lines.push(Line::from(Span::styled(
+                    format!("Warning: {}", err),
+                    Style::default().fg(Color::Red),
+                )));
+            }
+
+            if tp.transactions.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "(no transactions)",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled("hash  ", Style::default().fg(Color::Gray)),
+                    Span::styled("from -> to  ", Style::default().fg(Color::Gray)),
+                    Span::styled("value  ", Style::default().fg(Color::Gray)),
+                    Span::styled("fee(gwei)  ", Style::default().fg(Color::Gray)),
+                    Span::styled("gas  ", Style::default().fg(Color::Gray)),
+                    Span::styled("n", Style::default().fg(Color::Gray)),
+                ]));
+
+                let max_rows = area.height.saturating_sub(2) as usize; // leave room for header
+                for tx in tp.transactions.iter().take(max_rows) {
+                    let hash_short = short_hash(&tx.hash);
+                    let from_short = short_addr(&tx.from);
+                    let to_short = tx
+                        .to
+                        .as_ref()
+                        .map(|a| short_addr(a))
+                        .unwrap_or_else(|| "--".to_string());
+                    let val = fmt_eth_short(&tx.value);
+                    let fee = fmt_tx_fee_gwei(tx);
+                    let gas = tx
+                        .gas_limit
+                        .map(|g| g.to_string())
+                        .unwrap_or_else(|| "--".to_string());
+                    let row = vec![
+                        Span::styled(hash_short, Style::default().fg(Color::Cyan)),
+                        Span::raw("  "),
+                        Span::styled(from_short, Style::default().fg(Color::Blue)),
+                        Span::raw(" -> "),
+                        Span::styled(to_short, Style::default().fg(Color::Green)),
+                        Span::raw("  "),
+                        Span::styled(val, Style::default().fg(Color::Yellow)),
+                        Span::raw("  "),
+                        Span::styled(fee, Style::default().fg(Color::Magenta)),
+                        Span::raw("  "),
+                        Span::styled(gas, Style::default().fg(Color::Gray)),
+                        Span::raw("  n:"),
+                        Span::styled(tx.nonce.to_string(), Style::default().fg(Color::Gray)),
+                    ];
+                    lines.push(Line::from(row));
+                }
+
+                if tp.has_more {
+                    lines.push(Line::from(Span::styled(
+                        "+ more available via pagination",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+
+            let paragraph = Paragraph::new(lines)
+                .block(Block::default().title(title).borders(Borders::ALL))
+                .wrap(Wrap { trim: true });
+            frame.render_widget(paragraph, area);
+        } else {
+            let lines = vec![Line::from(vec![
+                Span::styled(
+                    "Set TXPOOL_URL to enable tx list.",
                     Style::default().fg(Color::DarkGray),
                 ),
             ])];

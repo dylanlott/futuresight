@@ -1,12 +1,12 @@
 BIN_NAME := futuresight
 CARGO ?= cargo
 
-## Defaults are set for Pecorino test net
+## Defaults are set for Parmigiana test net
 MAX_BLOCK_HISTORY ?= 40
 BLOCK_DELAY_SECS ?= 60
-RPC_URL ?= http://rpc.pecorino.signet.sh
+RPC_URL ?= http://rpc.parmigiana.signet.sh
 
-.PHONY: help build run dev release fmt lint clean test watch pecorino
+.PHONY: help build run dev release fmt lint clean test watch parmigiana
 
 help:
 	@echo "FutureSight Make Targets"

@@ -34,13 +34,13 @@ cargo build --release && cargo run
 
 ## Usage
 
-`tl;dr` `make run`  starts the dashboard for the Pecorino test net.
+`tl;dr` `make run`  starts the dashboard for the Parmigiana test net.
 
 ```bash
 # equivalent to make run
-cargo run -- http://rpc.pecorino.signet.sh 30 
+cargo run -- http://rpc.parmigiana.signet.sh 30 
 
-# with tx-pool-webservice metrics (fetches JSON from /transactions, /bundles, /signed-orders)
+# with tx-pool-webservice metrics (fetches JSON from /transactions, /bundles, /orders)
 TXPOOL_URL=http://localhost:8080 cargo run
 # or
 cargo run -- --txpool-url http://localhost:8080
@@ -53,7 +53,7 @@ Common shortcuts:
 ```bash
 make build        # debug build
 make release      # optimized build
-make run          # run FutureSight (targets Pecorino test network by default)
+make run          # run FutureSight (targets Parmigiana test network by default)
 make fmt          # run cargo fmt
 make lint         # run clippy
 make test         # run tests
@@ -70,7 +70,7 @@ You can configure FutureSight via CLI flags or environment variables.
 - RPC URL
 	- Positional arg: `cargo run -- <RPC_URL>`
 	- Env: `RPC_URL=http://...`
-	- Default: `http://rpc.pecorino.signet.sh`
+	- Default: `http://rpc.parmigiana.signet.sh`
 - Block delay alert threshold (seconds)
 	- Positional arg: `cargo run -- <RPC_URL> <BLOCK_DELAY_SECS>`
 	- Flag/env: `--block-delay-secs <N>` or `BLOCK_DELAY_SECS=<N>`
