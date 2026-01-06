@@ -77,34 +77,76 @@ impl Dashboard {
         self.should_quit = true;
     }
 
-    pub fn render(&self, frame: &mut Frame, metrics: &SignetMetrics) {
-        let chunks = Layout::default()
+    pub fn render(&self, frame: &mut Frame, host: &SignetMetrics, rollup: &SignetMetrics) {
+        let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3), // connection
-                Constraint::Length(3), // chain id
-                Constraint::Length(3), // block
-                Constraint::Length(7), // gas (expanded)
-                Constraint::Length(3), // block alert
-                Constraint::Length(4), // tx-pool summary
-                Constraint::Length(9), // tx list
-                Constraint::Min(6),    // history
-                Constraint::Length(4), // help
+                Constraint::Min(0),
+                Constraint::Length(4), // shared help
             ])
             .split(frame.area());
 
-        self.render_connection_status(frame, chunks[0], metrics);
-        self.render_chain_id(frame, chunks[1], metrics);
-        self.render_block_height(frame, chunks[2], metrics);
-        self.render_gas_price(frame, chunks[3], metrics);
-    self.render_block_delay_alert(frame, chunks[4], metrics);
-    self.render_txpool(frame, chunks[5], metrics);
-    self.render_txpool_transactions(frame, chunks[6], metrics);
-    self.render_block_history(frame, chunks[7], metrics);
-    self.render_help(frame, chunks[8]);
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
+            ])
+            .split(rows[0]);
+
+        self.render_panel(frame, cols[0], host, "Host");
+        self.render_panel(frame, cols[1], rollup, "Rollup");
+        self.render_help(frame, rows[1]);
     }
 
-    fn render_connection_status(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
+    fn render_panel(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics, label: &str) {
+        // Host side intentionally omits tx-pool sections.
+        if label == "Host" {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3), // connection
+                    Constraint::Length(3), // chain id
+                    Constraint::Length(3), // block
+                    Constraint::Length(7), // gas (expanded)
+                    Constraint::Length(3), // block alert
+                    Constraint::Min(6),    // history
+                ])
+                .split(area);
+
+            self.render_connection_status(frame, chunks[0], metrics, label);
+            self.render_chain_id(frame, chunks[1], metrics, label);
+            self.render_block_height(frame, chunks[2], metrics, label);
+            self.render_gas_price(frame, chunks[3], metrics, label);
+            self.render_block_delay_alert(frame, chunks[4], metrics, label);
+            self.render_block_history(frame, chunks[5], metrics, label);
+        } else {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3), // connection
+                    Constraint::Length(3), // chain id
+                    Constraint::Length(3), // block
+                    Constraint::Length(7), // gas (expanded)
+                    Constraint::Length(3), // block alert
+                    Constraint::Length(4), // tx-pool summary
+                    Constraint::Length(9), // tx list
+                    Constraint::Min(6),    // history
+                ])
+                .split(area);
+
+            self.render_connection_status(frame, chunks[0], metrics, label);
+            self.render_chain_id(frame, chunks[1], metrics, label);
+            self.render_block_height(frame, chunks[2], metrics, label);
+            self.render_gas_price(frame, chunks[3], metrics, label);
+            self.render_block_delay_alert(frame, chunks[4], metrics, label);
+            self.render_txpool(frame, chunks[5], metrics, label);
+            self.render_txpool_transactions(frame, chunks[6], metrics, label);
+            self.render_block_history(frame, chunks[7], metrics, label);
+        }
+    }
+
+    fn render_connection_status(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics, label: &str) {
         let status_text = match &metrics.connection_status {
             ConnectionStatus::Connected => "Connected".to_string(),
             ConnectionStatus::Stale => "Stale".to_string(),
@@ -150,12 +192,12 @@ impl Dashboard {
         let content = vec![Line::from(line_parts)];
 
         let paragraph = Paragraph::new(content)
-            .block(Block::default().title("Connection").borders(Borders::ALL));
+            .block(Block::default().title(format!("{} Connection", label)).borders(Borders::ALL));
 
         frame.render_widget(paragraph, area);
     }
 
-    fn render_block_height(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
+    fn render_block_height(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics, label: &str) {
         let block_text = match metrics.block_number {
             Some(block) => format!("{}", block),
             None => "N/A".to_string(),
@@ -181,12 +223,12 @@ impl Dashboard {
         ])];
 
         let paragraph = Paragraph::new(content)
-            .block(Block::default().title("Block Height").borders(Borders::ALL));
+            .block(Block::default().title(format!("{} Block Height", label)).borders(Borders::ALL));
 
         frame.render_widget(paragraph, area);
     }
 
-    fn render_gas_price(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
+    fn render_gas_price(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics, label: &str) {
         fn fmt_gwei_opt(v: Option<u128>) -> String {
             match v {
                 Some(wei) => format!("{:.2} Gwei", (wei as f64) / 1_000_000_000.0),
@@ -293,13 +335,13 @@ impl Dashboard {
         }
 
         let paragraph = Paragraph::new(lines)
-            .block(Block::default().title("Gas").borders(Borders::ALL))
+            .block(Block::default().title(format!("{} Gas", label)).borders(Borders::ALL))
             .wrap(Wrap { trim: true });
 
         frame.render_widget(paragraph, area);
     }
 
-    fn render_chain_id(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
+    fn render_chain_id(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics, label: &str) {
         let chain_text = match metrics.chain_id {
             Some(id) => format!("{}", id),
             None => "N/A".to_string(),
@@ -311,14 +353,14 @@ impl Dashboard {
         ])];
 
         let paragraph =
-            Paragraph::new(content).block(Block::default().title("Network").borders(Borders::ALL));
+            Paragraph::new(content).block(Block::default().title(format!("{} Network", label)).borders(Borders::ALL));
         frame.render_widget(paragraph, area);
     }
 
-    fn render_block_history(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
+    fn render_block_history(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics, label: &str) {
         // Show newest first (already stored newest at front)
         let mut lines: Vec<Line> = Vec::new();
-    for (idx, block) in metrics.block_history.iter().enumerate() {
+        for (idx, block) in metrics.block_history.iter().enumerate() {
             if idx >= 50 {
                 break;
             } // safety cap for rendering
@@ -367,13 +409,13 @@ impl Dashboard {
 
         let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true }).block(
             Block::default()
-                .title("Recent Blocks (newest first) ")
+                .title(format!("{} Recent Blocks (newest first) ", label))
                 .borders(Borders::ALL),
         );
         frame.render_widget(paragraph, area);
     }
 
-    fn render_block_delay_alert(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
+    fn render_block_delay_alert(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics, label: &str) {
         // Determine delay
         let now_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -409,12 +451,13 @@ impl Dashboard {
 
         let content = vec![Line::from(vec![Span::styled(msg, style)])];
         let paragraph =
-            Paragraph::new(content).block(Block::default().title(title).borders(Borders::ALL));
+            Paragraph::new(content)
+                .block(Block::default().title(format!("{} {}", label, title)).borders(Borders::ALL));
         frame.render_widget(paragraph, area);
     }
 
-    fn render_txpool(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
-        let title = "Tx Pool";
+    fn render_txpool(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics, label: &str) {
+        let title = format!("{} Tx Pool", label);
         if let Some(tp) = &metrics.txpool {
             let health_style = if tp.healthy {
                 Style::default().fg(Color::Green)
@@ -481,8 +524,8 @@ impl Dashboard {
         }
     }
 
-    fn render_txpool_transactions(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
-        let title = "Tx Pool Transactions";
+    fn render_txpool_transactions(&self, frame: &mut Frame, area: Rect, metrics: &SignetMetrics, label: &str) {
+        let title = format!("{} Tx Pool Transactions", label);
         if let Some(tp) = &metrics.txpool {
             let mut lines: Vec<Line> = Vec::new();
             if let Some(err) = &tp.error {
@@ -574,8 +617,7 @@ impl Dashboard {
                 Span::styled(" to quit", Style::default()),
             ]),
             Line::from(vec![
-                Span::styled("Updates every ", Style::default()),
-                Span::styled("5 seconds", Style::default().fg(Color::Cyan)),
+                Span::styled("Use --refresh-interval to adjust poll rate", Style::default().fg(Color::Cyan)),
             ]),
         ];
 

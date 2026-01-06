@@ -8,7 +8,7 @@ use alloy_provider::{Provider as ProviderTrait, RootProvider as AlloyProvider};
 use eyre::Result;
 use reqwest;
 use serde::{Deserialize, Serialize};
-use std::{collections::VecDeque, str::FromStr, time::Instant};
+use std::{collections::{HashSet, VecDeque}, str::FromStr, time::Instant};
 use url::Url;
 
 // ========================= GAS TRACKING HELPERS =========================
@@ -105,6 +105,7 @@ pub struct Config {
     pub max_block_history: usize,
     pub txpool_max_rows: usize,
     pub txpool_fetch_list: bool,
+    pub txpool_filter_contracts: Vec<Address>,
 }
 
 impl SignetMetrics {
@@ -273,9 +274,10 @@ impl MetricsCollector {
     pub fn new_with_txpool(config: Config, txpool_url: Option<String>) -> Self {
         let max_rows = config.txpool_max_rows;
         let fetch_list = config.txpool_fetch_list;
+        let filter_contracts = config.txpool_filter_contracts.clone();
         let mut s = Self::new(config);
         let url = txpool_url.unwrap_or_else(|| "https://transactions.parmigiana.signet.sh/".to_string());
-        s.tx_client = Some(TxPoolClient::new(url, max_rows, fetch_list));
+        s.tx_client = Some(TxPoolClient::new(url, max_rows, fetch_list, filter_contracts));
         s
     }
 
@@ -650,15 +652,22 @@ pub struct TxPoolClient {
     http: reqwest::Client,
     max_rows: usize,
     fetch_list: bool,
+    filter_contracts: Option<HashSet<Address>>, // restrict to specific contract calls when set
 }
 
 impl TxPoolClient {
-    pub fn new(base_url: String, max_rows: usize, fetch_list: bool) -> Self {
+    pub fn new(base_url: String, max_rows: usize, fetch_list: bool, filter_contracts: Vec<Address>) -> Self {
+        let filter_contracts = if filter_contracts.is_empty() {
+            None
+        } else {
+            Some(filter_contracts.into_iter().collect())
+        };
         Self {
             base_url,
             http: reqwest::Client::new(),
             max_rows: max_rows.max(1),
             fetch_list,
+            filter_contracts,
         }
     }
 
@@ -703,6 +712,10 @@ impl TxPoolClient {
             .into_iter()
             .filter_map(|t| TxPoolTx::from_wire(&t))
             .collect();
+
+        if let Some(filter) = &self.filter_contracts {
+            out.retain(|tx| tx.to.as_ref().map(|addr| filter.contains(addr)).unwrap_or(false));
+        }
 
         if out.len() > self.max_rows {
             out.truncate(self.max_rows);
