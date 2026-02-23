@@ -31,20 +31,16 @@ type CrosstermTerminal = Terminal<CrosstermBackend<Stdout>>;
     about = "FutureSight is a terminal dashboard showing Ethereum RPC metrics."
 )]
 struct Cli {
-    /// Ethereum JSON-RPC endpoint
-    #[arg(default_value = "http://rpc.parmigiana.signet.sh", env = "RPC_URL")]
-    rpc_url: String,
+    /// Host (L1) JSON-RPC endpoint (left pane)
+    #[arg(long = "host-rpc-url", env = "HOST_RPC_URL", default_value = "https://host-rpc.parmigiana.signet.sh")]
+    host_rpc_url: String,
 
-    /// Host (L1) JSON-RPC endpoint (left pane). Defaults to RPC_URL when unset.
-    #[arg(long = "host-rpc-url", env = "HOST_RPC_URL")]
-    host_rpc_url: Option<String>,
-
-    /// L2 rollup JSON-RPC endpoint (right pane). Defaults to RPC_URL when unset.
-    #[arg(long = "rollup-rpc-url", env = "ROLLUP_RPC_URL")]
-    rollup_rpc_url: Option<String>,
+    /// L2 rollup JSON-RPC endpoint (right pane)
+    #[arg(long = "rollup-rpc-url", env = "ROLLUP_RPC_URL", default_value = "https://rpc.parmigiana.signet.sh")]
+    rollup_rpc_url: String,
 
     /// Seconds before block delay alert is displayed
-    #[arg(default_value_t = crate::config::BLOCK_DELAY_DEFAULT, env = "BLOCK_DELAY_SECS")]
+    #[arg(long = "block-delay-secs", default_value_t = crate::config::BLOCK_DELAY_DEFAULT, env = "BLOCK_DELAY_SECS")]
     block_delay_secs: u64,
 
     /// How often metric data is refreshed
@@ -56,7 +52,7 @@ struct Cli {
     txpool_url: Option<String>,
 
     /// Base URL for rollup tx-pool-webservice (example: http://localhost:8080)
-    #[arg(long, env = "ROLLUP_TXPOOL_URL")]
+    #[arg(long, env = "ROLLUP_TXPOOL_URL", default_value = "https://transactions.parmigiana.signet.sh")]
     rollup_txpool_url: Option<String>,
 
     /// Maximum number of tx-pool transactions to keep and display
@@ -89,8 +85,8 @@ async fn main() -> Result<()> {
         "FutureSight {} - Signet terminal dashboard",
         env!("CARGO_PKG_VERSION")
     );
-    let host_rpc = cli.host_rpc_url.clone().unwrap_or_else(|| cli.rpc_url.clone());
-    let rollup_rpc = cli.rollup_rpc_url.clone().unwrap_or_else(|| cli.rpc_url.clone());
+    let host_rpc = cli.host_rpc_url.clone();
+    let rollup_rpc = cli.rollup_rpc_url.clone();
     println!("=== Host RPC: {} ===", host_rpc);
     println!("=== Rollup RPC: {} ===", rollup_rpc);
     if let Some(url) = &cli.txpool_url {
@@ -203,17 +199,12 @@ fn print_help(program: &str) {
     let version = env!("CARGO_PKG_VERSION");
     println!("{} {}\n", env!("CARGO_PKG_NAME"), version);
     println!("Usage:");
-    println!("  {program} [RPC_URL] [BLOCK_DELAY_SECS]");
+    println!("  {program} [OPTIONS]");
     println!("  {program} --help");
     println!("  {program} --version\n");
-    println!("Args:");
-    println!("  RPC_URL              Ethereum JSON-RPC endpoint (default: http://localhost:8545)");
-    println!(
-        "  BLOCK_DELAY_SECS     Seconds before block delay alert (default: 60 or env BLOCK_DELAY_SECS)\n"
-    );
     println!("Options:");
-    println!("  --host-rpc-url URL    Host RPC URL (defaults to RPC_URL or positional)");
-    println!("  --rollup-rpc-url URL  Rollup RPC URL (defaults to RPC_URL or positional)");
+    println!("  --host-rpc-url URL    Host (L1) RPC URL (default: https://rpc-host.parmigiana.signet.sh)");
+    println!("  --rollup-rpc-url URL  Rollup (L2) RPC URL (default: https://rpc.parmigiana.signet.sh)");
     println!("  --rollup-txpool-url   Rollup tx-pool-webservice base URL");
     println!("  --host-contracts ADDR[,ADDR...]  Filter host tx list to calls into listed contracts\n");
     println!(
@@ -221,8 +212,10 @@ fn print_help(program: &str) {
         crate::config::DEFAULT_MAX_BLOCK_HISTORY
     );
     println!("Environment:");
+    println!("  HOST_RPC_URL          Host (L1) RPC URL\n");
+    println!("  ROLLUP_RPC_URL        Rollup (L2) RPC URL\n");
     println!(
-        "  BLOCK_DELAY_SECS     Override block delay alert threshold when second arg omitted\n"
+        "  BLOCK_DELAY_SECS     Override block delay alert threshold\n"
     );
     println!("  MAX_BLOCK_HISTORY     Configure how many recent blocks to keep and display\n");
     println!(
@@ -231,8 +224,6 @@ fn print_help(program: &str) {
     println!(
         "  ROLLUP_TXPOOL_URL    Optional rollup tx-pool-webservice base URL (e.g. http://localhost:8080)\n"
     );
-    println!("  HOST_RPC_URL          Override host RPC URL (falls back to RPC_URL)\n");
-    println!("  ROLLUP_RPC_URL        Configure rollup RPC URL (falls back to RPC_URL)\n");
     println!("  HOST_CONTRACTS        Comma-separated contract addresses to filter host tx list\n");
     println!("Flags:");
     println!("  -h, --help           Show this help and exit");

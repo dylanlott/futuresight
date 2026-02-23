@@ -8,6 +8,7 @@ signet-constants = { version = "0.16.0-rc.1" }
 signet-tx-cache = { version = "0.16.0-rc.1" }
 
 alloy = { version = "1.0.24", features = ["full"] }
+alloy-consensus = "1.0.24"
 alloy-provider = "1.0.24"
 alloy-transport-http = { version = "1.0.24", features = ["reqwest"] }
 alloy-primitives = "1.0.24"

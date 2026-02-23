@@ -2577,6 +2577,7 @@ name = "futuresight"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "alloy-consensus",
  "alloy-primitives",
  "alloy-provider",
  "alloy-transport-http",

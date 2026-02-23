@@ -2,13 +2,16 @@ use crate::config::{
     FEE_HISTORY_BLOCKS, FEE_HISTORY_PERCENTILES, MAX_BACKFILL_PER_CYCLE, STALE_AFTER,
     SUGGESTION_RAMP_FACTOR,
 };
+use alloy::consensus::{Transaction as _, Typed2718 as _};
+use alloy_consensus::transaction::SignerRecoverable as _;
 use alloy::eips::eip4844::BlobTransactionSidecarItem;
 use alloy::primitives::{Address, B256, U256};
 use alloy_provider::{Provider as ProviderTrait, RootProvider as AlloyProvider};
 use eyre::Result;
 use reqwest;
 use serde::{Deserialize, Serialize};
-use std::{collections::{HashSet, VecDeque}, str::FromStr, time::Instant};
+use signet_tx_cache::client::TxCache;
+use std::{collections::{HashSet, VecDeque}, time::Instant};
 use url::Url;
 
 // ========================= GAS TRACKING HELPERS =========================
@@ -538,17 +541,17 @@ pub struct TxPoolTx {
 }
 
 impl TxPoolTx {
-    fn from_wire(tx: &TxPoolTransactionWire) -> Option<Self> {
-        let hash = parse_hex_b256(&tx.hash).unwrap_or_default();
-        let from = parse_hex_address(&tx.from)?;
-        let to = parse_hex_address(&tx.to);
-        let value = parse_hex_u256(&tx.value).unwrap_or_else(|| U256::ZERO);
-        let nonce = parse_hex_u128(&tx.nonce).unwrap_or(0);
-        let gas_limit = parse_hex_u128(&tx.gas);
-        let max_fee_per_gas = parse_hex_u128(&tx.max_fee_per_gas);
-        let max_priority_fee_per_gas = parse_hex_u128(&tx.max_priority_fee_per_gas);
-        let gas_price = parse_hex_u128(&tx.gas_price);
-        let tx_type = parse_hex_u128(&tx.tx_type).map(|v| v as u8);
+    fn from_envelope(tx: &alloy::consensus::TxEnvelope) -> Option<Self> {
+        let hash = *tx.tx_hash();
+        let from = tx.recover_signer().ok()?;
+        let to = tx.to();
+        let value = tx.value();
+        let nonce = tx.nonce() as u128;
+        let gas_limit = Some(tx.gas_limit() as u128);
+        let max_fee_per_gas = Some(tx.max_fee_per_gas());
+        let max_priority_fee_per_gas = tx.max_priority_fee_per_gas();
+        let gas_price = tx.gas_price();
+        let tx_type = Some(tx.ty());
 
         Some(Self {
             hash,
@@ -563,45 +566,6 @@ impl TxPoolTx {
             tx_type,
         })
     }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct TxPoolCursor {
-    #[serde(rename = "txnHash")]
-    pub txn_hash: Option<String>,
-    pub score: Option<u64>,
-    #[serde(rename = "globalTransactionScoreKey")]
-    pub global_transaction_score_key: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TxPoolTransactionsResponse {
-    pub transactions: Option<Vec<TxPoolTransactionWire>>,
-    pub cursor: Option<TxPoolCursor>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TxPoolTransactionWire {
-    #[serde(rename = "hash")]
-    pub hash: Option<String>,
-    #[serde(rename = "from")]
-    pub from: Option<String>,
-    #[serde(rename = "to")]
-    pub to: Option<String>,
-    #[serde(rename = "value")]
-    pub value: Option<String>,
-    #[serde(rename = "nonce")]
-    pub nonce: Option<String>,
-    #[serde(rename = "gas")]
-    pub gas: Option<String>,
-    #[serde(rename = "gasPrice")]
-    pub gas_price: Option<String>,
-    #[serde(rename = "maxFeePerGas")]
-    pub max_fee_per_gas: Option<String>,
-    #[serde(rename = "maxPriorityFeePerGas")]
-    pub max_priority_fee_per_gas: Option<String>,
-    #[serde(rename = "type")]
-    pub tx_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -650,6 +614,7 @@ impl TxPoolMetrics {
 pub struct TxPoolClient {
     base_url: String,
     http: reqwest::Client,
+    tx_cache: TxCache,
     max_rows: usize,
     fetch_list: bool,
     filter_contracts: Option<HashSet<Address>>, // restrict to specific contract calls when set
@@ -662,9 +627,11 @@ impl TxPoolClient {
         } else {
             Some(filter_contracts.into_iter().collect())
         };
+        let tx_cache = TxCache::new_from_string(&base_url).unwrap();
         Self {
             base_url,
             http: reqwest::Client::new(),
+            tx_cache,
             max_rows: max_rows.max(1),
             fetch_list,
             filter_contracts,
@@ -680,37 +647,18 @@ impl TxPoolClient {
         )
     }
 
-    async fn fetch_transactions(&self, cursor: Option<&TxPoolCursor>) -> Result<(Vec<TxPoolTx>, bool)> {
+    async fn fetch_transactions(&self) -> Result<(Vec<TxPoolTx>, bool)> {
         if !self.fetch_list {
             return Ok((Vec::new(), false));
         }
 
-        let mut req = self.http.get(&self.join_url("/transactions"));
-        if let Some(c) = cursor {
-            if let Some(v) = &c.txn_hash {
-                req = req.query(&[("txnHash", v)]);
-            }
-            if let Some(v) = c.score {
-                req = req.query(&[("score", v)]);
-            }
-            if let Some(v) = &c.global_transaction_score_key {
-                req = req.query(&[("globalTransactionScoreKey", v)]);
-            }
-        }
-
-        let resp = req.send().await?;
-        if !resp.status().is_success() {
-            return Err(eyre::eyre!(format!("/transactions HTTP {}", resp.status())));
-        }
-
-        let body = resp.text().await?;
-        let parsed: TxPoolTransactionsResponse = serde_json::from_str(&body)?;
-        let has_more = parsed.cursor.is_some();
-        let mut out: Vec<TxPoolTx> = parsed
-            .transactions
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|t| TxPoolTx::from_wire(&t))
+        let resp = self.tx_cache.get_transactions(None).await
+            .map_err(|e| eyre::eyre!("{}", e))?;
+        let has_more = resp.has_more();
+        let inner = resp.into_inner();
+        let mut out: Vec<TxPoolTx> = inner.transactions
+            .iter()
+            .filter_map(TxPoolTx::from_envelope)
             .collect();
 
         if let Some(filter) = &self.filter_contracts {
@@ -756,12 +704,12 @@ impl TxPoolClient {
             Err(e) => errors.push(format!("bundles: {}", e)),
         }
 
-        match self.fetch_count_from("/signed-orders").await {
-            Ok(v) => out.signed_orders_cache = v,
-            Err(e) => errors.push(format!("signed-orders: {}", e)),
+        match self.tx_cache.get_orders(None).await {
+            Ok(resp) => out.signed_orders_cache = Some(resp.into_inner().orders.len() as u64),
+            Err(e) => errors.push(format!("orders: {}", e)),
         }
 
-        match self.fetch_transactions(None).await {
+        match self.fetch_transactions().await {
             Ok((txs, has_more)) => {
                 out.transactions = VecDeque::from(txs);
                 out.has_more = has_more;
@@ -806,23 +754,3 @@ fn count_items(v: &serde_json::Value) -> Option<u64> {
     None
 }
 
-fn parse_hex_u128(s: &Option<String>) -> Option<u128> {
-    let raw = s.as_ref()?;
-    let trimmed = raw.trim_start_matches("0x");
-    u128::from_str_radix(trimmed, 16).ok()
-}
-
-fn parse_hex_u256(s: &Option<String>) -> Option<U256> {
-    let raw = s.as_ref()?;
-    U256::from_str(raw).ok()
-}
-
-fn parse_hex_b256(s: &Option<String>) -> Option<B256> {
-    let raw = s.as_ref()?;
-    B256::from_str(raw).ok()
-}
-
-fn parse_hex_address(s: &Option<String>) -> Option<Address> {
-    let raw = s.as_ref()?;
-    Address::from_str(raw).ok()
-}
