@@ -1,94 +1,93 @@
-# FutureSight 🔮
+# FutureSight
 
-> "Is the inevitable any less miraculous?" - _Veldka, wandering sage_
+FutureSight is a Rust terminal dashboard for monitoring Ethereum RPC health, recent block flow, fee pressure, and optional tx-pool activity across a host chain and a rollup.
 
-FutureSight is a minimal terminal dashboard for interacting with and observing the [Signet](https://signet.sh) network.
+![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)
+![Ethereum](https://img.shields.io/badge/Ethereum-3C3C3D?logo=ethereum&logoColor=white)
 
-![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white) ![Ethereum](https://img.shields.io/badge/Ethereum-3C3C3D?logo=ethereum&logoColor=white)
+![parmigiana dashboard screenshot](parmigiana.png)
 
-## Dashboard
+## What It Shows
 
-![FutureSight Dashboard](./assets/futuresight-dashboard.png)
+- Connection state with stale and error signaling
+- Current chain ID and latest observed block
+- Block age and chain halt alerts
+- EIP-1559 fee telemetry, fee suggestions, utilization gauge, and fee trend sparkline
+- Rolling block tape with gas usage and base fee context
+- Optional tx-pool service health, cache counts, and recent transactions
 
-FutureSight currently displays the following data:
+## Build
 
-- **Connection Status**: Current RPC connection state and last update time
-- **Chain Halt Detection**: Alerts if a new block hasn't been detected within the configured threshold
-- **Recent Blocks**: Rolling history of the latest blocks with tx count & gas utilization
-- **Block Height**: Displays the latest block number from the network
-- **Gas Price**: Current gas price displayed in gwei and wei
-- **Alerts**: Stale connection and block delay warnings
- - **Tx Pool (optional)**: If a tx-pool-webservice is configured, shows health and cache sizes for Transactions, Bundles, and Signed Orders
-
-## Installation
-
-*Pre-requisites: `make` and `rust` tooling*
-
-Clone the repository and build with Cargo:
+Prerequisites: Rust toolchain and `make`.
 
 ```bash
 git clone https://github.com/dylanlott/futuresight
 cd futuresight
-cargo build --release && cargo run
+cargo build --release
 ```
 
-## Usage
+## Run
 
-`tl;dr` `make run`  starts the dashboard for the Parmigiana test net.
+The default endpoints target the Parmigiana Signet environment.
 
 ```bash
-# equivalent to make run
-cargo run -- http://rpc.parmigiana.signet.sh 30 
-
-# with tx-pool-webservice metrics (fetches JSON from /transactions, /bundles, /orders)
-TXPOOL_URL=http://localhost:8080 cargo run
-# or
-cargo run -- --txpool-url http://localhost:8080
+cargo run
 ```
 
-### Make Commands
-
-Common shortcuts:
+Enable tx-pool telemetry explicitly:
 
 ```bash
-make build        # debug build
-make release      # optimized build
-make run          # run FutureSight (targets Parmigiana test network by default)
-make fmt          # run cargo fmt
-make lint         # run clippy
-make test         # run tests
+cargo run -- \
+  --txpool-url http://localhost:8080 \
+  --rollup-txpool-url https://transactions.parmigiana.signet.sh
 ```
 
-### Controls
+Tune refresh rate and history depth:
 
-- **q** or **Esc**: Quit the application
+```bash
+cargo run -- \
+  --refresh-interval 3 \
+  --max-block-history 40 \
+  --block-delay-secs 90
+```
 
-### Configuration
+Filter host tx-pool rows to specific contracts:
 
-You can configure FutureSight via CLI flags or environment variables.
+```bash
+cargo run -- \
+  --txpool-url http://localhost:8080 \
+  --host-contracts 0x1234...,0xabcd...
+```
 
-- RPC URL
-	- Positional arg: `cargo run -- <RPC_URL>`
-	- Env: `RPC_URL=http://...`
-	- Default: `http://rpc.parmigiana.signet.sh`
-- Block delay alert threshold (seconds)
-	- Positional arg: `cargo run -- <RPC_URL> <BLOCK_DELAY_SECS>`
-	- Flag/env: `--block-delay-secs <N>` or `BLOCK_DELAY_SECS=<N>`
-	- Default: `60`
-- Refresh interval (seconds)
-	- Flag/env: `-r, --refresh-interval <N>` or `REFRESH_INTERVAL=<N>`
-	- Default: `5`
-- Max block history (entries kept/displayed)
-	- Flag/env: `--max-block-history <N>` or `MAX_BLOCK_HISTORY=<N>`
-	- Default: `20`
-- Tx-pool-webservice integration
-	- Flag/env: `--txpool-url <URL>` or `TXPOOL_URL=<URL>`
-	- FutureSight requests JSON from `<URL>/transactions`, `<URL>/bundles`, and `<URL>/signed-orders` and computes counts from the returned items.
-	- The dashboard shows: health, last update, and item counts for Transactions, Bundles, and Signed Orders.
+## Configuration
 
-Notes:
-- The endpoints should return arrays or an object containing an array property (e.g., `items`, `data`, `transactions`, `bundles`, `signedOrders`, `signed_orders`). FutureSight counts the items accordingly.
+Every major flag can also be set through environment variables.
 
-## License
+| Flag | Env | Default |
+| --- | --- | --- |
+| `--host-rpc-url` | `HOST_RPC_URL` | `https://host-rpc.parmigiana.signet.sh` |
+| `--rollup-rpc-url` | `ROLLUP_RPC_URL` | `https://rpc.parmigiana.signet.sh` |
+| `--block-delay-secs` | `BLOCK_DELAY_SECS` | `60` |
+| `--refresh-interval` | `REFRESH_INTERVAL` | `2` |
+| `--max-block-history` | `MAX_BLOCK_HISTORY` | `24` |
+| `--txpool-max-rows` | `TXPOOL_MAX_ROWS` | `12` |
+| `--txpool-url` | `TXPOOL_URL` | unset |
+| `--rollup-txpool-url` | `ROLLUP_TXPOOL_URL` | unset |
+| `--host-contracts` | `HOST_CONTRACTS` | unset |
 
-This project is open source and available under the MIT License.
+## Controls
+
+- `q`
+- `Esc`
+
+## Make Targets
+
+```bash
+make parmigiana
+make build
+make release
+make run
+make fmt
+make lint
+make test
+```

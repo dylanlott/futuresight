@@ -2,21 +2,25 @@
 use std::time::Duration;
 
 /// How often metric data is refreshed
-pub const DEFAULT_REFRESH_INTERVAL: u64 = 1;
+pub const DEFAULT_REFRESH_INTERVAL: u64 = 2;
 /// How long before metric data is considered stale
-pub const STALE_AFTER: Duration = Duration::from_secs(20);
+pub const STALE_AFTER: Duration = Duration::from_secs(15);
 /// Number of blocks of history to keep in memory
-pub const DEFAULT_MAX_BLOCK_HISTORY: usize = 20;
+pub const DEFAULT_MAX_BLOCK_HISTORY: usize = 24;
 /// Number of tx-pool transactions to keep in memory/display
-pub const DEFAULT_TXPOOL_MAX_ROWS: usize = 30;
+pub const DEFAULT_TXPOOL_MAX_ROWS: usize = 12;
 /// Maximum number of missing blocks to backfill per update cycle
-pub const MAX_BACKFILL_PER_CYCLE: u64 = 6;
+pub const MAX_BACKFILL_PER_CYCLE: u64 = 12;
 /// How long to wait before considering the chain halted
 pub const BLOCK_DELAY_DEFAULT: u64 = 60;
+/// HTTP timeout for RPC requests
+pub const RPC_TIMEOUT_SECS: u64 = 6;
+/// HTTP timeout for tx-pool requests
+pub const TXPOOL_TIMEOUT_SECS: u64 = 4;
 
 // ========================= GAS CONFIG =========================
 /// Number of blocks to request in eth_feeHistory per poll
-pub const FEE_HISTORY_BLOCKS: u64 = 20;
+pub const FEE_HISTORY_BLOCKS: u64 = 24;
 /// Percentiles (0..=100) for eth_feeHistory rewards (tips)
 pub const FEE_HISTORY_PERCENTILES: [f64; 5] = [10.0, 25.0, 50.0, 75.0, 90.0];
 /// Max fee headroom factor applied to priority fee when computing suggested maxFee

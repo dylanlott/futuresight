@@ -1,17 +1,20 @@
 use crate::config::{
-    FEE_HISTORY_BLOCKS, FEE_HISTORY_PERCENTILES, MAX_BACKFILL_PER_CYCLE, STALE_AFTER,
-    SUGGESTION_RAMP_FACTOR,
+    FEE_HISTORY_BLOCKS, FEE_HISTORY_PERCENTILES, MAX_BACKFILL_PER_CYCLE, RPC_TIMEOUT_SECS,
+    STALE_AFTER, SUGGESTION_RAMP_FACTOR, TXPOOL_TIMEOUT_SECS,
 };
 use alloy::consensus::{Transaction as _, Typed2718 as _};
-use alloy_consensus::transaction::SignerRecoverable as _;
 use alloy::eips::eip4844::BlobTransactionSidecarItem;
 use alloy::primitives::{Address, B256, U256};
+use alloy_consensus::transaction::SignerRecoverable as _;
 use alloy_provider::{Provider as ProviderTrait, RootProvider as AlloyProvider};
 use eyre::Result;
-use reqwest;
 use serde::{Deserialize, Serialize};
 use signet_tx_cache::client::TxCache;
-use std::{collections::{HashSet, VecDeque}, time::Instant};
+use std::{
+    collections::{HashSet, VecDeque},
+    time::{Duration, Instant},
+};
+use tokio::time::timeout;
 use url::Url;
 
 // ========================= GAS TRACKING HELPERS =========================
@@ -140,6 +143,13 @@ impl SignetMetrics {
             blob_gas_utilization_ma_n: None,
         }
     }
+
+    pub fn chain_height(&self) -> Option<u64> {
+        self.block_number
+            .into_iter()
+            .chain(self.block_history.front().map(|block| block.number))
+            .max()
+    }
 }
 
 pub struct SignetRpcClient {
@@ -152,35 +162,83 @@ impl SignetRpcClient {
     pub fn new(rpc_url: String) -> Result<Self> {
         let url = Url::parse(&rpc_url)?;
         let provider = AlloyProvider::new_http(url);
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(RPC_TIMEOUT_SECS))
+            .user_agent(format!(
+                "{}/{}",
+                env!("CARGO_PKG_NAME"),
+                env!("CARGO_PKG_VERSION")
+            ))
+            .build()?;
+
         Ok(Self {
             provider,
             rpc_url,
-            http: reqwest::Client::new(),
+            http,
         })
     }
 
     pub async fn get_block_number(&self) -> Result<u64> {
-        let block_number = self.provider.get_block_number().await?;
+        let block_number = timeout(
+            Duration::from_secs(RPC_TIMEOUT_SECS),
+            self.provider.get_block_number(),
+        )
+        .await
+        .map_err(|_| eyre::eyre!("eth_blockNumber timed out after {}s", RPC_TIMEOUT_SECS))??;
         Ok(block_number)
     }
 
     pub async fn get_gas_price(&self) -> Result<u128> {
-        let gas = self.provider.get_gas_price().await?;
+        let gas = timeout(
+            Duration::from_secs(RPC_TIMEOUT_SECS),
+            self.provider.get_gas_price(),
+        )
+        .await
+        .map_err(|_| eyre::eyre!("eth_gasPrice timed out after {}s", RPC_TIMEOUT_SECS))??;
         Ok(gas)
     }
 
     pub async fn get_chain_id(&self) -> Result<u64> {
-        let id = self.provider.get_chain_id().await?;
+        let id = timeout(
+            Duration::from_secs(RPC_TIMEOUT_SECS),
+            self.provider.get_chain_id(),
+        )
+        .await
+        .map_err(|_| eyre::eyre!("eth_chainId timed out after {}s", RPC_TIMEOUT_SECS))??;
         Ok(id)
+    }
+
+    pub async fn get_max_priority_fee_per_gas(&self) -> Result<u128> {
+        let priority_fee = timeout(
+            Duration::from_secs(RPC_TIMEOUT_SECS),
+            self.provider.get_max_priority_fee_per_gas(),
+        )
+        .await
+        .map_err(|_| {
+            eyre::eyre!(
+                "eth_maxPriorityFeePerGas timed out after {}s",
+                RPC_TIMEOUT_SECS
+            )
+        })??;
+        Ok(priority_fee)
     }
 
     pub async fn get_block_by_number(&self, number: u64) -> Result<BlockInfo> {
         // Use alloy provider's get_block API which returns Option<Block>
-        let block = self
-            .provider
-            .get_block_by_number(alloy::eips::BlockNumberOrTag::Number(number))
-            .await?
-            .ok_or_else(|| eyre::eyre!("block not found"))?;
+        let block = timeout(
+            Duration::from_secs(RPC_TIMEOUT_SECS),
+            self.provider
+                .get_block_by_number(alloy::eips::BlockNumberOrTag::Number(number)),
+        )
+        .await
+        .map_err(|_| {
+            eyre::eyre!(
+                "eth_getBlockByNumber({}) timed out after {}s",
+                number,
+                RPC_TIMEOUT_SECS
+            )
+        })??
+        .ok_or_else(|| eyre::eyre!("block not found"))?;
 
         // Best-effort header-derived gas fields (may be None on pre-1559/4844)
         let base_fee_per_gas = block.header.base_fee_per_gas.map(|v| v as u128);
@@ -263,29 +321,34 @@ pub struct MetricsCollector {
 }
 
 impl MetricsCollector {
-    pub fn new(config: Config) -> Self {
-        let client = SignetRpcClient::new(config.rpc_url.clone()).unwrap();
+    pub fn new(config: Config) -> Result<Self> {
+        let client = SignetRpcClient::new(config.rpc_url.clone())?;
         let metrics = SignetMetrics::new(config.clone());
-        Self {
+        Ok(Self {
             client,
             metrics,
             tx_client: None,
-        }
+        })
     }
 
     /// Construct a collector with an optional tx-pool-webservice base URL.
-    pub fn new_with_txpool(config: Config, txpool_url: Option<String>) -> Self {
+    pub fn new_with_txpool(config: Config, txpool_url: Option<String>) -> Result<Self> {
         let max_rows = config.txpool_max_rows;
         let fetch_list = config.txpool_fetch_list;
         let filter_contracts = config.txpool_filter_contracts.clone();
-        let mut s = Self::new(config);
-        let url = txpool_url.unwrap_or_else(|| "https://transactions.parmigiana.signet.sh/".to_string());
-        s.tx_client = Some(TxPoolClient::new(url, max_rows, fetch_list, filter_contracts));
-        s
+        let mut collector = Self::new(config)?;
+        if let Some(url) = txpool_url {
+            collector.tx_client = Some(TxPoolClient::new(
+                url,
+                max_rows,
+                fetch_list,
+                filter_contracts,
+            )?);
+        }
+        Ok(collector)
     }
 
     pub async fn collect_metrics(&mut self) -> &SignetMetrics {
-        // Determine connectivity primarily via chain_id (lightweight) then block number/gas price.
         let mut status = match self.client.get_chain_id().await {
             Ok(chain_id) => {
                 self.metrics.chain_id = Some(chain_id);
@@ -294,83 +357,93 @@ impl MetricsCollector {
             Err(e) => ConnectionStatus::Error(format!("Chain ID: {}", e)),
         };
 
-        if matches!(status, ConnectionStatus::Connected) {
-            if let Err(e) = self
-                .client
-                .get_block_number()
-                .await
-                .map(|b| self.metrics.block_number = Some(b))
-            {
+        if !matches!(status, ConnectionStatus::Connected) {
+            self.clear_fee_metrics();
+            self.metrics.connection_status = status;
+            self.metrics.last_updated = Instant::now();
+            self.collect_txpool_metrics().await;
+            return &self.metrics;
+        }
+
+        let (block_number_result, gas_price_result, fee_history_result, priority_fee_result) = tokio::join!(
+            self.client.get_block_number(),
+            self.client.get_gas_price(),
+            self.client
+                .get_fee_history(FEE_HISTORY_BLOCKS, "latest", &FEE_HISTORY_PERCENTILES),
+            self.client.get_max_priority_fee_per_gas(),
+        );
+
+        match block_number_result {
+            Ok(block_number) => self.metrics.block_number = Some(block_number),
+            Err(e) => {
                 status = ConnectionStatus::Error(format!("Block number: {}", e));
             }
         }
 
-        // Maintain block history if we have a block number and are connected or stale.
         if matches!(status, ConnectionStatus::Connected) {
-            if let Some(latest_num) = self.metrics.block_number {
-                let last_recorded = self.metrics.block_history.front().map(|b| b.number); // front as newest
-
-                // Determine range to fetch (inclusive) ensuring descending storage (newest at front)
-                let fetch_range: Vec<u64> = if let Some(last) = last_recorded {
-                    if latest_num > last {
-                        let start = last + 1;
-                        let end = latest_num;
-                        (start..=end)
-                            .rev()
-                            .take(MAX_BACKFILL_PER_CYCLE as usize)
-                            .collect()
-                    } else {
-                        Vec::new()
-                    }
-                } else {
-                    vec![latest_num]
-                };
-
-                for num in fetch_range {
-                    // numbers already reversed for newest-first insert
-                    if let Ok(block) = self.client.get_block_by_number(num).await {
-                        let ts = block.timestamp;
-                        if self
-                            .metrics
-                            .latest_block_timestamp
-                            .map(|cur| ts > cur)
-                            .unwrap_or(true)
-                        {
-                            self.metrics.latest_block_timestamp = Some(ts);
-                        }
-                        self.metrics.block_history.push_front(block);
-                        while self.metrics.block_history.len() > self.metrics.max_block_history {
-                            self.metrics.block_history.pop_back();
-                        }
-                    }
+            match gas_price_result {
+                Ok(gas_price) => self.metrics.gas_price = Some(gas_price),
+                Err(e) => {
+                    status = ConnectionStatus::Error(format!("Gas price: {}", e));
                 }
             }
         }
 
-        if matches!(status, ConnectionStatus::Connected) {
-            if let Err(e) = self
-                .client
-                .get_gas_price()
-                .await
-                .map(|g| self.metrics.gas_price = Some(g))
-            {
-                status = ConnectionStatus::Error(format!("Gas price: {}", e));
+        if matches!(status, ConnectionStatus::Connected)
+            && let Some(latest_num) = self.metrics.block_number
+        {
+            match block_fetch_plan(
+                latest_num,
+                self.metrics.block_history.front().map(|block| block.number),
+                self.metrics.block_history.back().map(|block| block.number),
+                self.metrics.block_history.len(),
+                self.metrics.max_block_history,
+            ) {
+                BlockFetchPlan::Newer(fetch_range) => {
+                    for num in fetch_range {
+                        if let Ok(block) = self.client.get_block_by_number(num).await {
+                            let ts = block.timestamp;
+                            if self
+                                .metrics
+                                .latest_block_timestamp
+                                .map(|cur| ts > cur)
+                                .unwrap_or(true)
+                            {
+                                self.metrics.latest_block_timestamp = Some(ts);
+                            }
+                            self.metrics.block_history.push_front(block);
+                            while self.metrics.block_history.len() > self.metrics.max_block_history
+                            {
+                                self.metrics.block_history.pop_back();
+                            }
+                        }
+                    }
+                }
+                BlockFetchPlan::Older(fetch_range) => {
+                    for num in fetch_range {
+                        if let Ok(block) = self.client.get_block_by_number(num).await {
+                            self.metrics.block_history.push_back(block);
+                            while self.metrics.block_history.len() > self.metrics.max_block_history
+                            {
+                                self.metrics.block_history.pop_back();
+                            }
+                        }
+                    }
+                }
+                BlockFetchPlan::None => {}
             }
+        }
 
-            // Fee history polling (best-effort)
-            match self
-                .client
-                .get_fee_history(FEE_HISTORY_BLOCKS, "latest", &FEE_HISTORY_PERCENTILES)
-                .await
-            {
+        if matches!(status, ConnectionStatus::Connected) {
+            match fee_history_result {
                 Ok(h) => {
-                    // parse base fees and next base
                     let mut base_fees: Vec<u128> = Vec::with_capacity(h.base_fee_per_gas.len());
                     for hf in &h.base_fee_per_gas {
                         if let Some(v) = hex_to_u128(hf) {
                             base_fees.push(v);
                         }
                     }
+
                     let (current_base_fee, next_base_fee) = if base_fees.len() >= 2 {
                         (
                             Some(base_fees[base_fees.len() - 2]),
@@ -382,17 +455,14 @@ impl MetricsCollector {
                     self.metrics.base_fee_per_gas = current_base_fee;
                     self.metrics.next_base_fee_per_gas = next_base_fee;
 
-                    // gas used ratios -> percent
                     let gas_used_ratios: Vec<f64> =
                         h.gas_used_ratio.iter().map(|r| r * 100.0).collect();
-                    let utilization_ma = if gas_used_ratios.is_empty() {
+                    self.metrics.gas_utilization_ma_n = if gas_used_ratios.is_empty() {
                         None
                     } else {
                         Some(gas_used_ratios.iter().sum::<f64>() / gas_used_ratios.len() as f64)
                     };
-                    self.metrics.gas_utilization_ma_n = utilization_ma;
 
-                    // volatility: latest vs avg (exclude next)
                     self.metrics.gas_volatility_5m = if base_fees.len() >= 2 {
                         let sample = &base_fees[..base_fees.len() - 1];
                         let avg =
@@ -407,22 +477,20 @@ impl MetricsCollector {
                         None
                     };
 
-                    // reward percentiles -> series
                     let block_count = h.gas_used_ratio.len() as u64;
                     let mut reward_perc: Vec<(u8, Vec<u128>)> = Vec::new();
                     for (pi, pct) in FEE_HISTORY_PERCENTILES.iter().enumerate() {
                         let mut series: Vec<u128> = Vec::with_capacity(h.reward.len());
                         for row in &h.reward {
-                            if let Some(hexv) = row.get(pi) {
-                                if let Some(v) = hex_to_u128(hexv) {
-                                    series.push(v);
-                                }
+                            if let Some(hexv) = row.get(pi)
+                                && let Some(v) = hex_to_u128(hexv)
+                            {
+                                series.push(v);
                             }
                         }
                         reward_perc.push((*pct as u8, series));
                     }
 
-                    // suggestions from last block percentiles
                     let last_idx = if block_count > 0 {
                         (block_count - 1) as usize
                     } else {
@@ -471,19 +539,10 @@ impl MetricsCollector {
                         reward_percentiles: reward_perc,
                     });
                 }
-                Err(_e) => {
-                    // null out dependent fields, don't change status
-                    self.metrics.fee_history = None;
-                    self.metrics.base_fee_per_gas = None;
-                    self.metrics.next_base_fee_per_gas = None;
-                    self.metrics.suggested_fees = None;
-                    self.metrics.gas_utilization_ma_n = None;
-                    self.metrics.gas_volatility_5m = None;
-                }
+                Err(_) => self.clear_fee_metrics(),
             }
 
-            // RPC-suggested maxPriorityFeePerGas (best-effort)
-            match self.client.provider.get_max_priority_fee_per_gas().await {
+            match priority_fee_result {
                 Ok(p) => self.metrics.max_priority_fee_suggested = Some(p),
                 Err(_) => self.metrics.max_priority_fee_suggested = None,
             }
@@ -494,15 +553,7 @@ impl MetricsCollector {
         if matches!(self.metrics.connection_status, ConnectionStatus::Connected) {
             self.metrics.last_successful = Some(self.metrics.last_updated);
         }
-        // Tx-pool metrics (best-effort, does not affect RPC status)
-        if let Some(client) = &self.tx_client {
-            match client.fetch_metrics().await {
-                Ok(txm) => self.metrics.txpool = Some(txm),
-                Err(e) => {
-                    self.metrics.txpool = Some(TxPoolMetrics::with_error(e.to_string()));
-                }
-            }
-        }
+        self.collect_txpool_metrics().await;
         &self.metrics
     }
 
@@ -514,12 +565,36 @@ impl MetricsCollector {
         if matches!(
             self.metrics.connection_status,
             ConnectionStatus::Connected | ConnectionStatus::Stale
-        ) {
-            if let Some(last_ok) = self.metrics.last_successful {
-                if last_ok.elapsed() > STALE_AFTER {
-                    self.metrics.connection_status = ConnectionStatus::Stale;
+        ) && let Some(last_ok) = self.metrics.last_successful
+            && last_ok.elapsed() > STALE_AFTER
+        {
+            self.metrics.connection_status = ConnectionStatus::Stale;
+        }
+    }
+
+    fn clear_fee_metrics(&mut self) {
+        self.metrics.base_fee_per_gas = None;
+        self.metrics.next_base_fee_per_gas = None;
+        self.metrics.max_priority_fee_suggested = None;
+        self.metrics.suggested_fees = None;
+        self.metrics.fee_history = None;
+        self.metrics.gas_utilization_ma_n = None;
+        self.metrics.gas_volatility_5m = None;
+    }
+
+    async fn collect_txpool_metrics(&mut self) {
+        if let Some(client) = &self.tx_client {
+            match client.fetch_metrics().await {
+                Ok(txm) => self.metrics.txpool = Some(txm),
+                Err(e) => {
+                    self.metrics.txpool = Some(TxPoolMetrics::with_error(
+                        client.base_url.clone(),
+                        e.to_string(),
+                    ));
                 }
             }
+        } else {
+            self.metrics.txpool = None;
         }
     }
 }
@@ -596,12 +671,12 @@ impl TxPoolMetrics {
         }
     }
 
-    pub fn with_error(err: String) -> Self {
+    pub fn with_error(base_url: String, err: String) -> Self {
         Self {
             healthy: false,
             last_updated: Instant::now(),
             error: Some(err),
-            base_url: "".to_string(),
+            base_url,
             transactions_cache: None,
             bundles_cache: None,
             signed_orders_cache: None,
@@ -621,21 +696,36 @@ pub struct TxPoolClient {
 }
 
 impl TxPoolClient {
-    pub fn new(base_url: String, max_rows: usize, fetch_list: bool, filter_contracts: Vec<Address>) -> Self {
+    pub fn new(
+        base_url: String,
+        max_rows: usize,
+        fetch_list: bool,
+        filter_contracts: Vec<Address>,
+    ) -> Result<Self> {
         let filter_contracts = if filter_contracts.is_empty() {
             None
         } else {
             Some(filter_contracts.into_iter().collect())
         };
-        let tx_cache = TxCache::new_from_string(&base_url).unwrap();
-        Self {
+        let tx_cache = TxCache::new_from_string(&base_url)
+            .map_err(|e| eyre::eyre!("invalid tx-pool url '{}': {}", base_url, e))?;
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(TXPOOL_TIMEOUT_SECS))
+            .user_agent(format!(
+                "{}/{}",
+                env!("CARGO_PKG_NAME"),
+                env!("CARGO_PKG_VERSION")
+            ))
+            .build()?;
+
+        Ok(Self {
             base_url,
-            http: reqwest::Client::new(),
+            http,
             tx_cache,
             max_rows: max_rows.max(1),
             fetch_list,
             filter_contracts,
-        }
+        })
     }
 
     fn join_url(&self, path: &str) -> String {
@@ -652,17 +742,26 @@ impl TxPoolClient {
             return Ok((Vec::new(), false));
         }
 
-        let resp = self.tx_cache.get_transactions(None).await
+        let resp = self
+            .tx_cache
+            .get_transactions(None)
+            .await
             .map_err(|e| eyre::eyre!("{}", e))?;
         let has_more = resp.has_more();
         let inner = resp.into_inner();
-        let mut out: Vec<TxPoolTx> = inner.transactions
+        let mut out: Vec<TxPoolTx> = inner
+            .transactions
             .iter()
             .filter_map(TxPoolTx::from_envelope)
             .collect();
 
         if let Some(filter) = &self.filter_contracts {
-            out.retain(|tx| tx.to.as_ref().map(|addr| filter.contains(addr)).unwrap_or(false));
+            out.retain(|tx| {
+                tx.to
+                    .as_ref()
+                    .map(|addr| filter.contains(addr))
+                    .unwrap_or(false)
+            });
         }
 
         if out.len() > self.max_rows {
@@ -690,26 +789,36 @@ impl TxPoolClient {
         let mut out = TxPoolMetrics::new(self.base_url.clone());
         out.last_updated = Instant::now();
 
-        // Fetch counts from endpoints. Do sequentially for simplicity/reliability.
-        // Endpoints: /transactions, /bundles, /signed-orders
+        let (
+            transactions_count_result,
+            bundles_count_result,
+            orders_result,
+            transaction_list_result,
+        ) = tokio::join!(
+            self.fetch_count_from("/transactions"),
+            self.fetch_count_from("/bundles"),
+            self.tx_cache.get_orders(None),
+            self.fetch_transactions(),
+        );
+
         let mut errors: Vec<String> = Vec::new();
 
-        match self.fetch_count_from("/transactions").await {
-            Ok(v) => out.transactions_cache = v,
+        match transactions_count_result {
+            Ok(value) => out.transactions_cache = value,
             Err(e) => errors.push(format!("transactions: {}", e)),
         }
 
-        match self.fetch_count_from("/bundles").await {
-            Ok(v) => out.bundles_cache = v,
+        match bundles_count_result {
+            Ok(value) => out.bundles_cache = value,
             Err(e) => errors.push(format!("bundles: {}", e)),
         }
 
-        match self.tx_cache.get_orders(None).await {
+        match orders_result {
             Ok(resp) => out.signed_orders_cache = Some(resp.into_inner().orders.len() as u64),
             Err(e) => errors.push(format!("orders: {}", e)),
         }
 
-        match self.fetch_transactions().await {
+        match transaction_list_result {
             Ok((txs, has_more)) => {
                 out.transactions = VecDeque::from(txs);
                 out.has_more = has_more;
@@ -745,12 +854,163 @@ fn count_items(v: &serde_json::Value) -> Option<u64> {
             "bundles",
             "signedOrders",
             "signed_orders",
+            "results",
         ] {
             if let Some(arr) = obj.get(key).and_then(|x| x.as_array()) {
                 return Some(arr.len() as u64);
+            }
+        }
+
+        for key in ["count", "total", "totalCount", "total_count"] {
+            if let Some(value) = obj.get(key).and_then(|x| x.as_u64()) {
+                return Some(value);
             }
         }
     }
     None
 }
 
+enum BlockFetchPlan {
+    Newer(Vec<u64>),
+    Older(Vec<u64>),
+    None,
+}
+
+fn block_fetch_plan(
+    latest_num: u64,
+    newest_recorded: Option<u64>,
+    oldest_recorded: Option<u64>,
+    current_len: usize,
+    max_block_history: usize,
+) -> BlockFetchPlan {
+    if max_block_history == 0 {
+        return BlockFetchPlan::None;
+    }
+
+    match newest_recorded {
+        Some(last) if latest_num > last => {
+            let start = latest_num
+                .saturating_sub(MAX_BACKFILL_PER_CYCLE.saturating_sub(1))
+                .max(last + 1);
+            BlockFetchPlan::Newer((start..=latest_num).collect())
+        }
+        Some(_) => {
+            let remaining = max_block_history.saturating_sub(current_len);
+            if remaining == 0 {
+                return BlockFetchPlan::None;
+            }
+
+            if let Some(oldest) = oldest_recorded {
+                let fetch_count = remaining.min(MAX_BACKFILL_PER_CYCLE as usize) as u64;
+                let start = oldest.saturating_sub(fetch_count);
+                if start < oldest {
+                    BlockFetchPlan::Older((start..oldest).rev().collect())
+                } else {
+                    BlockFetchPlan::None
+                }
+            } else {
+                BlockFetchPlan::None
+            }
+        }
+        None => {
+            let history_window = max_block_history.min(MAX_BACKFILL_PER_CYCLE as usize) as u64;
+            let start = latest_num.saturating_sub(history_window.saturating_sub(1));
+            BlockFetchPlan::Newer((start..=latest_num).collect())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BlockFetchPlan, BlockInfo, Config, SignetMetrics, block_fetch_plan, count_items};
+    use serde_json::json;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn count_items_supports_common_shapes() {
+        assert_eq!(count_items(&json!([1, 2, 3])), Some(3));
+        assert_eq!(count_items(&json!({"transactions": [1, 2]})), Some(2));
+        assert_eq!(count_items(&json!({"totalCount": 9})), Some(9));
+    }
+
+    #[test]
+    fn block_fetch_backfills_initial_history() {
+        assert!(matches!(
+            block_fetch_plan(101, None, None, 0, 4),
+            BlockFetchPlan::Newer(ref nums) if nums == &vec![98, 99, 100, 101]
+        ));
+    }
+
+    #[test]
+    fn block_fetch_limits_incremental_backfill() {
+        assert!(matches!(
+            block_fetch_plan(120, Some(116), Some(105), 12, 24),
+            BlockFetchPlan::Newer(ref nums) if nums == &vec![117, 118, 119, 120]
+        ));
+    }
+
+    #[test]
+    fn block_fetch_backfills_older_history_when_tip_is_unchanged() {
+        assert!(matches!(
+            block_fetch_plan(120, Some(120), Some(109), 12, 24),
+            BlockFetchPlan::Older(ref nums)
+                if nums == &vec![108, 107, 106, 105, 104, 103, 102, 101, 100, 99, 98, 97]
+        ));
+    }
+
+    #[test]
+    fn chain_height_prefers_highest_observed_tip() {
+        let mut metrics = SignetMetrics::new(Config {
+            rpc_url: "http://localhost:8545".to_string(),
+            block_delay_threshold: 60,
+            max_block_history: 8,
+            txpool_max_rows: 8,
+            txpool_fetch_list: false,
+            txpool_filter_contracts: Vec::new(),
+        });
+        metrics.block_number = Some(100);
+        metrics.block_history = VecDeque::from(vec![BlockInfo {
+            number: 103,
+            hash: String::new(),
+            parent_hash: String::new(),
+            timestamp: 0,
+            tx_count: 0,
+            gas_used: 0,
+            gas_limit: 0,
+            blobs: Vec::new(),
+            base_fee_per_gas: None,
+            blob_gas_used: None,
+            excess_blob_gas: None,
+        }]);
+
+        assert_eq!(metrics.chain_height(), Some(103));
+    }
+
+    #[test]
+    fn chain_height_uses_rpc_tip_when_history_is_missing_or_older() {
+        let mut metrics = SignetMetrics::new(Config {
+            rpc_url: "http://localhost:8545".to_string(),
+            block_delay_threshold: 60,
+            max_block_history: 8,
+            txpool_max_rows: 8,
+            txpool_fetch_list: false,
+            txpool_filter_contracts: Vec::new(),
+        });
+        metrics.block_number = Some(100);
+        metrics.block_history = VecDeque::from(vec![BlockInfo {
+            number: 99,
+            hash: String::new(),
+            parent_hash: String::new(),
+            timestamp: 0,
+            tx_count: 0,
+            gas_used: 0,
+            gas_limit: 0,
+            blobs: Vec::new(),
+            base_fee_per_gas: None,
+            blob_gas_used: None,
+            excess_blob_gas: None,
+        }]);
+
+        assert_eq!(metrics.chain_height(), Some(100));
+    }
+}
