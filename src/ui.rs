@@ -384,7 +384,7 @@ impl Dashboard {
                         Style::default().fg(Color::Gray),
                     )]),
                     Line::from(vec![Span::styled(
-                        "Use --rollup-txpool-url to enable rollup flow metrics.",
+                        "Use --txpool-url to enable rollup flow metrics.",
                         Style::default().fg(Color::DarkGray),
                     )]),
                 ];
@@ -533,10 +533,19 @@ impl Dashboard {
         host: &SignetMetrics,
         rollup: &SignetMetrics,
     ) {
+        let (filter_label, filter_color) = if host.host_contract_filter_active {
+            (" filter:on", Color::Green)
+        } else {
+            (" filter:off", Color::DarkGray)
+        };
+
         let lines = vec![Line::from(vec![
             Span::styled("Controls ", Style::default().fg(Color::DarkGray)),
             Span::styled("q", Style::default().fg(Color::Yellow)),
             Span::styled(" quit", Style::default().fg(Color::Gray)),
+            Span::raw("  "),
+            Span::styled("f", Style::default().fg(Color::Yellow)),
+            Span::styled(filter_label, Style::default().fg(filter_color)),
             Span::raw("  "),
             Span::styled(
                 format!("refresh {}s", self.refresh_interval),

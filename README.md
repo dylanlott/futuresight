@@ -2,8 +2,7 @@
 
 FutureSight is a Rust terminal dashboard for monitoring Ethereum RPC health, recent block flow, fee pressure, and optional tx-pool activity across a host chain and a rollup.
 
-![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)
-![Ethereum](https://img.shields.io/badge/Ethereum-3C3C3D?logo=ethereum&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white) ![Ethereum](https://img.shields.io/badge/Ethereum-3C3C3D?logo=ethereum&logoColor=white)
 
 ![parmigiana dashboard screenshot](parmigiana.png)
 
@@ -15,7 +14,7 @@ FutureSight is a Rust terminal dashboard for monitoring Ethereum RPC health, rec
 - Block age and chain halt alerts
 - EIP-1559 fee telemetry, fee suggestions, utilization gauge, and fee trend sparkline
 - Rolling block tape with gas usage and base fee context
-- Optional rollup tx-pool service health, cache counts, and recent transactions in the rollup panel
+- Optional tx-pool service health, cache counts, and recent transactions in the rollup panel
 
 ## Build
 
@@ -50,27 +49,19 @@ cargo run -- \
   --block-delay-secs 90
 ```
 
-Enable rollup tx-pool telemetry:
+Enable tx-pool telemetry:
 
 ```bash
 cargo run -- \
-  --rollup-txpool-url https://transactions.parmigiana.signet.sh
+  --txpool-url https://transactions.parmigiana.signet.sh
 ```
 
 Disable tx-pool transaction lists while keeping tx-pool summary counts:
 
 ```bash
 cargo run -- \
-  --rollup-txpool-url https://transactions.parmigiana.signet.sh \
+  --txpool-url https://transactions.parmigiana.signet.sh \
   --no-txpool-list
-```
-
-Configure host-side tx-pool collection flags:
-
-```bash
-cargo run -- \
-  --txpool-url http://localhost:8080 \
-  --host-contracts 0x1234...,0xabcd...
 ```
 
 Use the Makefile wrappers:
@@ -83,6 +74,7 @@ make mainnet
 ```
 
 Notes:
+
 - `cargo run` uses the CLI defaults shown in the table below.
 - `make run` falls back to the same Parmigiana endpoint defaults as the CLI, but existing shell env vars or `make` variable overrides still win.
 - `make parmigiana` forces `HOST_RPC_URL=https://host-rpc.parmigiana.signet.sh` and `ROLLUP_RPC_URL=https://rpc.parmigiana.signet.sh`.
@@ -93,23 +85,22 @@ Notes:
 
 Most runtime flags can also be set through environment variables.
 
-| Flag | Env | Default |
-| --- | --- | --- |
-| `--host-rpc-url` | `HOST_RPC_URL` | `https://host-rpc.parmigiana.signet.sh` |
-| `--rollup-rpc-url` | `ROLLUP_RPC_URL` | `https://rpc.parmigiana.signet.sh` |
-| `--block-delay-secs` | `BLOCK_DELAY_SECS` | `60` |
-| `-r`, `--refresh-interval` | `REFRESH_INTERVAL` | `2` |
-| `--max-block-history` | `MAX_BLOCK_HISTORY` | `24` |
-| `--txpool-max-rows` | `TXPOOL_MAX_ROWS` | `12` |
-| `--txpool-url` | `TXPOOL_URL` | unset |
-| `--rollup-txpool-url` | `ROLLUP_TXPOOL_URL` | unset |
-| `--no-txpool-list` | none | `false` |
-| `--host-contracts` | `HOST_CONTRACTS` | unset |
+Flag                       | Env                 | Default
+-------------------------- | ------------------- | -------------------------------------------
+`--host-rpc-url`           | `HOST_RPC_URL`      | `https://host-rpc.parmigiana.signet.sh`
+`--rollup-rpc-url`         | `ROLLUP_RPC_URL`    | `https://rpc.parmigiana.signet.sh`
+`--txpool-url`             | `TXPOOL_URL`        | `https://transactions.parmigiana.signet.sh`
+`--block-delay-secs`       | `BLOCK_DELAY_SECS`  | `60`
+`--refresh-interval`, `-r` | `REFRESH_INTERVAL`  | `2`
+`--max-block-history`      | `MAX_BLOCK_HISTORY` | `24`
+`--txpool-max-rows`        | `TXPOOL_MAX_ROWS`   | `12`
+`--no-txpool-list`         | none                | `false`
 
 Notes:
-- `--rollup-txpool-url` powers the rollup panel's Flow Radar section.
-- `--txpool-url` and `--host-contracts` configure host tx-pool collection, but host tx-pool telemetry is not currently rendered in the TUI.
-- `--no-txpool-list` disables fetching transaction rows for both host and rollup tx-pool clients while keeping summary requests enabled.
+
+- `--txpool-url` powers the rollup panel's Flow Radar section.
+- `--txpool-url` is a network-level tx-pool endpoint. For known Parmigiana and mainnet hosts, FutureSight auto-populates the watched host system contracts from Signet constants instead of taking a manual contract list.
+- `--no-txpool-list` disables fetching transaction rows while keeping tx-pool summary requests enabled.
 
 ## Controls
 
@@ -133,5 +124,4 @@ make test
 make watch
 ```
 
-`make dev` is an alias for `make watch`.
-`make watch` requires `cargo-watch`.
+`make dev` is an alias for `make watch`. `make watch` requires `cargo-watch`.

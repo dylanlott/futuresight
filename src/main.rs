@@ -2,7 +2,6 @@ mod config;
 mod data;
 mod ui;
 
-use alloy::primitives::Address;
 use clap::{Parser, value_parser};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -63,13 +62,9 @@ struct Cli {
     )]
     refresh_interval: u64,
 
-    /// Base URL for the host tx-pool service.
+    /// Base URL for the network tx-pool service.
     #[arg(long, env = "TXPOOL_URL")]
     txpool_url: Option<String>,
-
-    /// Base URL for the rollup tx-pool service.
-    #[arg(long, env = "ROLLUP_TXPOOL_URL")]
-    rollup_txpool_url: Option<String>,
 
     /// Maximum tx-pool rows rendered per panel.
     #[arg(
@@ -90,10 +85,6 @@ struct Cli {
         default_value_t = crate::config::DEFAULT_MAX_BLOCK_HISTORY
     )]
     max_block_history: usize,
-
-    /// Restrict host tx-pool rows to calls into these contracts.
-    #[arg(long = "host-contracts", env = "HOST_CONTRACTS", value_delimiter = ',')]
-    host_contracts: Vec<Address>,
 }
 
 #[tokio::main]
@@ -119,7 +110,7 @@ async fn run(cli: Cli) -> Result<()> {
             max_block_history: cli.max_block_history,
             txpool_max_rows: cli.txpool_max_rows,
             txpool_fetch_list: !cli.txpool_disable_list,
-            txpool_filter_contracts: cli.host_contracts.clone(),
+            txpool_watch_signet_host_contracts: true,
         },
         cli.txpool_url.clone(),
     )?;
@@ -131,9 +122,9 @@ async fn run(cli: Cli) -> Result<()> {
             max_block_history: cli.max_block_history,
             txpool_max_rows: cli.txpool_max_rows,
             txpool_fetch_list: !cli.txpool_disable_list,
-            txpool_filter_contracts: Vec::new(),
+            txpool_watch_signet_host_contracts: false,
         },
-        cli.rollup_txpool_url.clone(),
+        cli.txpool_url.clone(),
     )?;
 
     tokio::join!(
@@ -167,9 +158,12 @@ async fn run(cli: Cli) -> Result<()> {
 
         if event::poll(ui_tick)?
             && let Event::Key(key) = event::read()?
-            && matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
         {
-            dashboard.quit();
+            match key.code {
+                KeyCode::Char('q') | KeyCode::Esc => dashboard.quit(),
+                KeyCode::Char('f') => host_collector.toggle_host_contract_filter(),
+                _ => {}
+            }
         }
 
         if dashboard.should_quit {

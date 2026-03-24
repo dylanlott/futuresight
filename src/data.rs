@@ -9,6 +9,7 @@ use alloy_consensus::transaction::SignerRecoverable as _;
 use alloy_provider::{Provider as ProviderTrait, RootProvider as AlloyProvider};
 use eyre::Result;
 use serde::{Deserialize, Serialize};
+use signet_constants::SignetSystemConstants;
 use signet_tx_cache::client::TxCache;
 use std::{
     collections::{HashSet, VecDeque},
@@ -60,6 +61,7 @@ pub struct SignetMetrics {
     pub latest_block_timestamp: Option<u64>, // unix seconds
     pub block_delay_threshold: u64,          // seconds
     pub txpool: Option<TxPoolMetrics>,
+    pub host_contract_filter_active: bool,
 
     // Gas tracking (EIP-1559)
     pub base_fee_per_gas: Option<u128>,           // wei
@@ -111,7 +113,7 @@ pub struct Config {
     pub max_block_history: usize,
     pub txpool_max_rows: usize,
     pub txpool_fetch_list: bool,
-    pub txpool_filter_contracts: Vec<Address>,
+    pub txpool_watch_signet_host_contracts: bool,
 }
 
 impl SignetMetrics {
@@ -129,6 +131,7 @@ impl SignetMetrics {
             latest_block_timestamp: None,
             block_delay_threshold: config.block_delay_threshold,
             txpool: None,
+            host_contract_filter_active: config.txpool_watch_signet_host_contracts,
 
             // init gas fields
             base_fee_per_gas: None,
@@ -318,6 +321,7 @@ pub struct MetricsCollector {
     client: SignetRpcClient,
     metrics: SignetMetrics,
     tx_client: Option<TxPoolClient>,
+    txpool_watch_signet_host_contracts: bool,
 }
 
 impl MetricsCollector {
@@ -328,6 +332,7 @@ impl MetricsCollector {
             client,
             metrics,
             tx_client: None,
+            txpool_watch_signet_host_contracts: config.txpool_watch_signet_host_contracts,
         })
     }
 
@@ -335,15 +340,9 @@ impl MetricsCollector {
     pub fn new_with_txpool(config: Config, txpool_url: Option<String>) -> Result<Self> {
         let max_rows = config.txpool_max_rows;
         let fetch_list = config.txpool_fetch_list;
-        let filter_contracts = config.txpool_filter_contracts.clone();
         let mut collector = Self::new(config)?;
         if let Some(url) = txpool_url {
-            collector.tx_client = Some(TxPoolClient::new(
-                url,
-                max_rows,
-                fetch_list,
-                filter_contracts,
-            )?);
+            collector.tx_client = Some(TxPoolClient::new(url, max_rows, fetch_list)?);
         }
         Ok(collector)
     }
@@ -352,6 +351,7 @@ impl MetricsCollector {
         let mut status = match self.client.get_chain_id().await {
             Ok(chain_id) => {
                 self.metrics.chain_id = Some(chain_id);
+                self.update_txpool_watch_contracts(chain_id);
                 ConnectionStatus::Connected
             }
             Err(e) => ConnectionStatus::Error(format!("Chain ID: {}", e)),
@@ -582,6 +582,31 @@ impl MetricsCollector {
         self.metrics.gas_volatility_5m = None;
     }
 
+    fn update_txpool_watch_contracts(&mut self, chain_id: u64) {
+        if !self.txpool_watch_signet_host_contracts {
+            return;
+        }
+
+        if let Some(client) = &mut self.tx_client {
+            client.set_filter_contracts(host_watch_contracts_for_chain_id(chain_id));
+        }
+    }
+
+    pub fn toggle_host_contract_filter(&mut self) {
+        self.txpool_watch_signet_host_contracts = !self.txpool_watch_signet_host_contracts;
+        self.metrics.host_contract_filter_active = self.txpool_watch_signet_host_contracts;
+
+        if let Some(client) = &mut self.tx_client {
+            if self.txpool_watch_signet_host_contracts {
+                if let Some(chain_id) = self.metrics.chain_id {
+                    client.set_filter_contracts(host_watch_contracts_for_chain_id(chain_id));
+                }
+            } else {
+                client.set_filter_contracts(std::iter::empty::<Address>());
+            }
+        }
+    }
+
     async fn collect_txpool_metrics(&mut self) {
         if let Some(client) = &self.tx_client {
             match client.fetch_metrics().await {
@@ -696,17 +721,7 @@ pub struct TxPoolClient {
 }
 
 impl TxPoolClient {
-    pub fn new(
-        base_url: String,
-        max_rows: usize,
-        fetch_list: bool,
-        filter_contracts: Vec<Address>,
-    ) -> Result<Self> {
-        let filter_contracts = if filter_contracts.is_empty() {
-            None
-        } else {
-            Some(filter_contracts.into_iter().collect())
-        };
+    pub fn new(base_url: String, max_rows: usize, fetch_list: bool) -> Result<Self> {
         let tx_cache = TxCache::new_from_string(&base_url)
             .map_err(|e| eyre::eyre!("invalid tx-pool url '{}': {}", base_url, e))?;
         let http = reqwest::Client::builder()
@@ -724,8 +739,20 @@ impl TxPoolClient {
             tx_cache,
             max_rows: max_rows.max(1),
             fetch_list,
-            filter_contracts,
+            filter_contracts: None,
         })
+    }
+
+    pub fn set_filter_contracts<I>(&mut self, filter_contracts: I)
+    where
+        I: IntoIterator<Item = Address>,
+    {
+        let contracts: HashSet<Address> = filter_contracts.into_iter().collect();
+        self.filter_contracts = if contracts.is_empty() {
+            None
+        } else {
+            Some(contracts)
+        };
     }
 
     fn join_url(&self, path: &str) -> String {
@@ -870,6 +897,31 @@ fn count_items(v: &serde_json::Value) -> Option<u64> {
     None
 }
 
+fn host_watch_contracts_for_chain_id(chain_id: u64) -> Vec<Address> {
+    signet_constants_for_host_chain_id(chain_id)
+        .map(|constants| {
+            vec![
+                constants.host_zenith(),
+                constants.host_orders(),
+                constants.host_passage(),
+                constants.host_transactor(),
+            ]
+        })
+        .unwrap_or_default()
+}
+
+fn signet_constants_for_host_chain_id(chain_id: u64) -> Option<SignetSystemConstants> {
+    for constants in [
+        SignetSystemConstants::parmigiana(),
+        SignetSystemConstants::mainnet(),
+    ] {
+        if constants.host_chain_id() == chain_id {
+            return Some(constants);
+        }
+    }
+    None
+}
+
 enum BlockFetchPlan {
     Newer(Vec<u64>),
     Older(Vec<u64>),
@@ -922,8 +974,12 @@ fn block_fetch_plan(
 
 #[cfg(test)]
 mod tests {
-    use super::{BlockFetchPlan, BlockInfo, Config, SignetMetrics, block_fetch_plan, count_items};
+    use super::{
+        BlockFetchPlan, BlockInfo, Config, SignetMetrics, block_fetch_plan, count_items,
+        host_watch_contracts_for_chain_id,
+    };
     use serde_json::json;
+    use signet_constants::SignetSystemConstants;
     use std::collections::VecDeque;
 
     #[test]
@@ -959,6 +1015,38 @@ mod tests {
     }
 
     #[test]
+    fn known_host_chains_use_signet_system_contract_watch_list() {
+        let parmigiana = SignetSystemConstants::parmigiana();
+        let parmigiana_contracts = host_watch_contracts_for_chain_id(parmigiana.host_chain_id());
+        assert_eq!(
+            parmigiana_contracts,
+            vec![
+                parmigiana.host_zenith(),
+                parmigiana.host_orders(),
+                parmigiana.host_passage(),
+                parmigiana.host_transactor(),
+            ]
+        );
+
+        let mainnet = SignetSystemConstants::mainnet();
+        let mainnet_contracts = host_watch_contracts_for_chain_id(mainnet.host_chain_id());
+        assert_eq!(
+            mainnet_contracts,
+            vec![
+                mainnet.host_zenith(),
+                mainnet.host_orders(),
+                mainnet.host_passage(),
+                mainnet.host_transactor(),
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_host_chain_has_no_watched_contracts() {
+        assert!(host_watch_contracts_for_chain_id(42).is_empty());
+    }
+
+    #[test]
     fn chain_height_prefers_highest_observed_tip() {
         let mut metrics = SignetMetrics::new(Config {
             rpc_url: "http://localhost:8545".to_string(),
@@ -966,7 +1054,7 @@ mod tests {
             max_block_history: 8,
             txpool_max_rows: 8,
             txpool_fetch_list: false,
-            txpool_filter_contracts: Vec::new(),
+            txpool_watch_signet_host_contracts: false,
         });
         metrics.block_number = Some(100);
         metrics.block_history = VecDeque::from(vec![BlockInfo {
@@ -994,7 +1082,7 @@ mod tests {
             max_block_history: 8,
             txpool_max_rows: 8,
             txpool_fetch_list: false,
-            txpool_filter_contracts: Vec::new(),
+            txpool_watch_signet_host_contracts: false,
         });
         metrics.block_number = Some(100);
         metrics.block_history = VecDeque::from(vec![BlockInfo {
