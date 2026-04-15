@@ -1,5 +1,6 @@
 mod config;
 mod data;
+mod events;
 mod ui;
 
 use clap::{Parser, value_parser};
@@ -162,6 +163,11 @@ async fn run(cli: Cli) -> Result<()> {
             match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => dashboard.quit(),
                 KeyCode::Char('f') => host_collector.toggle_host_contract_filter(),
+                KeyCode::Tab => dashboard.switch_tab(),
+                KeyCode::Up | KeyCode::Char('k') => dashboard.scroll_up(1),
+                KeyCode::Down | KeyCode::Char('j') => dashboard.scroll_down(1),
+                KeyCode::PageUp => dashboard.scroll_up(20),
+                KeyCode::PageDown => dashboard.scroll_down(20),
                 _ => {}
             }
         }

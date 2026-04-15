@@ -30,3 +30,9 @@ pub const GAS_ALERT_HIGH_GWEI: f64 = 100.0;
 /// Spike multiplier threshold for base fee vs MA
 pub const GAS_SPIKE_MULTIPLIER: f64 = 2.0;
 // Utilization moving average window is aligned with FEE_HISTORY_BLOCKS in code paths
+
+// ========================= EVENT LOG =========================
+/// Maximum system events retained in memory per chain
+pub const EVENT_LOG_MAX_ENTRIES: usize = 500;
+/// Initial lookback depth (in blocks) when the event log first connects
+pub const EVENT_LOG_LOOKBACK_BLOCKS: u64 = 50;

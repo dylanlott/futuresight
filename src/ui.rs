@@ -9,7 +9,10 @@ use ratatui::{
 use std::time::{Duration, Instant};
 
 use crate::config::{GAS_ALERT_HIGH_GWEI, GAS_SPIKE_MULTIPLIER, STALE_AFTER};
-use crate::data::{ConnectionStatus, SignetMetrics, SuggestedFeeTier, TxPoolMetrics, TxPoolTx};
+use crate::data::{
+    BuilderEntry, ConnectionStatus, SignetMetrics, SuggestedFeeTier, TxPoolMetrics, TxPoolTx,
+};
+use crate::events::SystemEvent;
 
 #[derive(Clone, Copy)]
 enum ChainTipSyncStatus {
@@ -18,8 +21,16 @@ enum ChainTipSyncStatus {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActiveTab {
+    Dashboard,
+    Events,
+}
+
 pub struct Dashboard {
     pub should_quit: bool,
+    pub active_tab: ActiveTab,
+    pub events_scroll: usize,
     refresh_interval: u64,
 }
 
@@ -27,6 +38,8 @@ impl Dashboard {
     pub fn new(refresh_interval: u64) -> Self {
         Self {
             should_quit: false,
+            active_tab: ActiveTab::Dashboard,
+            events_scroll: 0,
             refresh_interval,
         }
     }
@@ -35,34 +48,60 @@ impl Dashboard {
         self.should_quit = true;
     }
 
+    pub fn switch_tab(&mut self) {
+        self.active_tab = match self.active_tab {
+            ActiveTab::Dashboard => ActiveTab::Events,
+            ActiveTab::Events => ActiveTab::Dashboard,
+        };
+        self.events_scroll = 0;
+    }
+
+    pub fn scroll_up(&mut self, n: usize) {
+        self.events_scroll = self.events_scroll.saturating_sub(n);
+    }
+
+    pub fn scroll_down(&mut self, n: usize) {
+        self.events_scroll = self.events_scroll.saturating_add(n);
+    }
+
     pub fn render(&self, frame: &mut Frame, host: &SignetMetrics, rollup: &SignetMetrics) {
         let outer = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
             .constraints([
                 Constraint::Length(4),
-                Constraint::Min(18),
+                Constraint::Length(1),
+                Constraint::Min(16),
                 Constraint::Length(3),
             ])
             .split(frame.area());
 
         self.render_header(frame, outer[0], host, rollup);
+        self.render_tab_bar(frame, outer[1]);
 
-        let panels = if outer[1].width >= 160 {
-            Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(outer[1])
-        } else {
-            Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(outer[1])
-        };
+        match self.active_tab {
+            ActiveTab::Dashboard => {
+                let panels = if outer[2].width >= 160 {
+                    Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                        .split(outer[2])
+                } else {
+                    Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                        .split(outer[2])
+                };
 
-        self.render_host_panel(frame, panels[0], host);
-        self.render_rollup_panel(frame, panels[1], host, rollup);
-        self.render_footer(frame, outer[2], host, rollup);
+                self.render_host_panel(frame, panels[0], host);
+                self.render_rollup_panel(frame, panels[1], host, rollup);
+            }
+            ActiveTab::Events => {
+                self.render_events(frame, outer[2], host, rollup);
+            }
+        }
+
+        self.render_footer(frame, outer[3], host, rollup);
     }
 
     fn render_header(
@@ -144,6 +183,7 @@ impl Dashboard {
         host: &SignetMetrics,
         metrics: &SignetMetrics,
     ) {
+        let builder_height = builder_section_height(&metrics.builder_stats);
         let sections = if area.height >= 34 {
             Layout::default()
                 .direction(Direction::Vertical)
@@ -151,6 +191,7 @@ impl Dashboard {
                     Constraint::Length(6),
                     Constraint::Length(8),
                     Constraint::Length(12),
+                    Constraint::Length(builder_height),
                     Constraint::Min(8),
                 ])
                 .split(area)
@@ -161,6 +202,7 @@ impl Dashboard {
                     Constraint::Length(6),
                     Constraint::Length(8),
                     Constraint::Length(10),
+                    Constraint::Length(builder_height),
                     Constraint::Min(6),
                 ])
                 .split(area)
@@ -169,7 +211,8 @@ impl Dashboard {
         self.render_summary(frame, sections[0], metrics, "Rollup", Some(host));
         self.render_gas(frame, sections[1], metrics, "Rollup");
         self.render_txpool(frame, sections[2], metrics, "Rollup");
-        self.render_block_history(frame, sections[3], metrics, "Rollup");
+        render_builder_stats(frame, sections[3], metrics);
+        self.render_block_history(frame, sections[4], metrics, "Rollup");
     }
 
     fn render_summary(
@@ -469,7 +512,14 @@ impl Dashboard {
             return;
         }
 
-        let header = Row::new(vec!["blk", "age", "tx", "gas", "base", "hash"]).style(
+        let is_rollup = label == "Rollup";
+
+        let header = if is_rollup {
+            Row::new(vec!["blk", "age", "tx", "gas", "base", "builder", "hash"])
+        } else {
+            Row::new(vec!["blk", "age", "tx", "gas", "base", "hash"])
+        }
+        .style(
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
@@ -497,27 +547,134 @@ impl Dashboard {
                     .map(|value| fmt_gwei_opt(Some(value)))
                     .unwrap_or_else(|| "--".to_string());
 
-                Row::new(vec![
+                let mut cells = vec![
                     Cell::from(format!("#{}", block.number)),
                     Cell::from(relative_age_from_ts(block.timestamp)),
                     Cell::from(block.tx_count.to_string()),
                     Cell::from(format!("{:.0}%", gas_ratio)),
                     Cell::from(base_fee),
-                    Cell::from(trim_middle(&block.hash, 14)),
-                ])
-                .style(row_style)
+                ];
+                if is_rollup {
+                    cells.push(Cell::from(fmt_builder(
+                        &block.builder,
+                        &metrics.builder_stats,
+                    )));
+                }
+                cells.push(Cell::from(trim_middle(&block.hash, 14)));
+
+                Row::new(cells).style(row_style)
             })
             .collect::<Vec<_>>();
 
-        let table = Table::new(
-            rows,
-            [
+        let widths: Vec<Constraint> = if is_rollup {
+            vec![
+                Constraint::Length(10),
+                Constraint::Length(8),
+                Constraint::Length(6),
+                Constraint::Length(7),
+                Constraint::Length(10),
+                Constraint::Length(14),
+                Constraint::Min(12),
+            ]
+        } else {
+            vec![
                 Constraint::Length(10),
                 Constraint::Length(8),
                 Constraint::Length(6),
                 Constraint::Length(7),
                 Constraint::Length(10),
                 Constraint::Min(12),
+            ]
+        };
+
+        let table = Table::new(rows, widths).header(header).column_spacing(1);
+
+        frame.render_widget(table, inner);
+    }
+
+    fn render_tab_bar(&self, frame: &mut Frame, area: Rect) {
+        let active_style = |active: bool| {
+            if active {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            }
+        };
+
+        let line = Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                " Dashboard ",
+                active_style(self.active_tab == ActiveTab::Dashboard),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                " Events ",
+                active_style(self.active_tab == ActiveTab::Events),
+            ),
+        ]);
+        frame.render_widget(Paragraph::new(line), area);
+    }
+
+    fn render_events(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        host: &SignetMetrics,
+        rollup: &SignetMetrics,
+    ) {
+        let block = shell_block("Event Log".to_string(), Color::Yellow);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        // Merge events from both chains, newest-first by observation time.
+        let mut all_events: Vec<&SystemEvent> =
+            host.events.iter().chain(rollup.events.iter()).collect();
+        all_events.sort_by(|a, b| b.observed_at.cmp(&a.observed_at));
+
+        if all_events.is_empty() {
+            frame.render_widget(
+                Paragraph::new("(no events captured yet)")
+                    .style(Style::default().fg(Color::DarkGray)),
+                inner,
+            );
+            return;
+        }
+
+        if inner.height < 3 {
+            return;
+        }
+
+        let header = Row::new(vec![
+            "chain", "block", "age", "event", "contract", "detail", "tx",
+        ])
+        .style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        );
+
+        let max_rows = inner.height.saturating_sub(2) as usize;
+        let rows: Vec<Row<'static>> = all_events
+            .iter()
+            .skip(self.events_scroll)
+            .take(max_rows)
+            .map(|event| event_row(event))
+            .collect();
+
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Length(7),
+                Constraint::Length(10),
+                Constraint::Length(8),
+                Constraint::Length(16),
+                Constraint::Length(11),
+                Constraint::Min(16),
+                Constraint::Length(14),
             ],
         )
         .header(header)
@@ -539,10 +696,29 @@ impl Dashboard {
             (" filter:off", Color::DarkGray)
         };
 
-        let lines = vec![Line::from(vec![
+        let tab_dest = match self.active_tab {
+            ActiveTab::Dashboard => " events",
+            ActiveTab::Events => " dashboard",
+        };
+
+        let mut spans = vec![
             Span::styled("Controls ", Style::default().fg(Color::DarkGray)),
             Span::styled("q", Style::default().fg(Color::Yellow)),
             Span::styled(" quit", Style::default().fg(Color::Gray)),
+            Span::raw("  "),
+            Span::styled("Tab", Style::default().fg(Color::Yellow)),
+            Span::styled(tab_dest, Style::default().fg(Color::Gray)),
+        ];
+
+        if self.active_tab == ActiveTab::Events {
+            spans.extend([
+                Span::raw("  "),
+                Span::styled("↑↓", Style::default().fg(Color::Yellow)),
+                Span::styled(" scroll", Style::default().fg(Color::Gray)),
+            ]);
+        }
+
+        spans.extend([
             Span::raw("  "),
             Span::styled("f", Style::default().fg(Color::Yellow)),
             Span::styled(filter_label, Style::default().fg(filter_color)),
@@ -560,7 +736,9 @@ impl Dashboard {
                 ),
                 Style::default().fg(Color::Gray),
             ),
-        ])];
+        ]);
+
+        let lines = vec![Line::from(spans)];
 
         frame.render_widget(
             Paragraph::new(lines).block(shell_block("Flight Notes".to_string(), Color::DarkGray)),
@@ -795,6 +973,45 @@ fn tx_row(tx: &TxPoolTx) -> Row<'static> {
     ])
 }
 
+fn event_row(event: &SystemEvent) -> Row<'static> {
+    let chain_style = match event.chain_label {
+        "Host" => Style::default().fg(Color::Cyan),
+        _ => Style::default().fg(Color::LightMagenta),
+    };
+
+    let age = event
+        .timestamp
+        .map(relative_age_from_ts)
+        .unwrap_or_else(|| "--".to_string());
+
+    Row::new(vec![
+        Cell::from(event.chain_label.to_string()).style(chain_style),
+        Cell::from(format!("#{}", event.block_number)).style(Style::default().fg(Color::White)),
+        Cell::from(age).style(Style::default().fg(Color::Yellow)),
+        Cell::from(event.event_name.clone())
+            .style(Style::default().fg(event_name_color(&event.event_name))),
+        Cell::from(event.contract_label.to_string()).style(Style::default().fg(Color::Gray)),
+        Cell::from(event.summary.clone()).style(Style::default().fg(Color::DarkGray)),
+        Cell::from(short_hash(&event.tx_hash)).style(Style::default().fg(Color::Cyan)),
+    ])
+}
+
+fn event_name_color(name: &str) -> Color {
+    match name {
+        "BlockSubmitted" => Color::Green,
+        "SequencerSet" => Color::Yellow,
+        "Enter" | "EnterToken" => Color::Cyan,
+        "Exit" | "ExitToken" => Color::Magenta,
+        "Order" => Color::Blue,
+        "Filled" => Color::Green,
+        "Sweep" => Color::Yellow,
+        "Transact" => Color::Red,
+        "Withdrawal" => Color::LightMagenta,
+        "GasConfigured" | "EnterConfigured" => Color::DarkGray,
+        _ => Color::DarkGray,
+    }
+}
+
 fn sparkline_points(metrics: &SignetMetrics) -> Vec<u64> {
     metrics
         .fee_history
@@ -933,4 +1150,91 @@ fn relative_age(duration: Duration) -> String {
 #[allow(dead_code)]
 fn instant_age(instant: Instant) -> String {
     relative_age(instant.elapsed())
+}
+
+// ========================= BUILDER STATS =========================
+
+fn builder_section_height(stats: &[BuilderEntry]) -> u16 {
+    if stats.is_empty() {
+        return 0;
+    }
+    // border (2) + header (1) + one row per builder, capped at 6
+    (stats.len().min(6) as u16) + 3
+}
+
+fn render_builder_stats(frame: &mut Frame, area: Rect, metrics: &SignetMetrics) {
+    if metrics.builder_stats.is_empty() {
+        return;
+    }
+
+    let accent = panel_accent("Rollup");
+    let block = shell_block("Rollup Builders".to_string(), accent);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 3 {
+        return;
+    }
+
+    let total_blocks = metrics.block_history.len();
+
+    let header = Row::new(vec!["builder", "address", "blocks", "share"]).style(
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    );
+
+    let max_rows = inner.height.saturating_sub(2) as usize;
+    let rows: Vec<Row<'static>> = metrics
+        .builder_stats
+        .iter()
+        .take(max_rows)
+        .enumerate()
+        .map(|(i, entry)| {
+            let name = entry.name.unwrap_or("unknown").to_string();
+            let addr = short_addr(&entry.address);
+            let pct = if total_blocks > 0 {
+                (entry.block_count as f64 / total_blocks as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            let style = if i == 0 {
+                Style::default().fg(accent)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+
+            Row::new(vec![
+                Cell::from(name),
+                Cell::from(addr),
+                Cell::from(entry.block_count.to_string()),
+                Cell::from(format!("{:.0}%", pct)),
+            ])
+            .style(style)
+        })
+        .collect();
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(14),
+            Constraint::Length(16),
+            Constraint::Length(8),
+            Constraint::Min(6),
+        ],
+    )
+    .header(header)
+    .column_spacing(1);
+
+    frame.render_widget(table, inner);
+}
+
+fn fmt_builder(address: &Address, stats: &[BuilderEntry]) -> String {
+    stats
+        .iter()
+        .find(|entry| entry.address == *address)
+        .and_then(|entry| entry.name)
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| short_addr(address))
 }

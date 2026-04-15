@@ -1,7 +1,9 @@
 use crate::config::{
-    FEE_HISTORY_BLOCKS, FEE_HISTORY_PERCENTILES, MAX_BACKFILL_PER_CYCLE, RPC_TIMEOUT_SECS,
-    STALE_AFTER, SUGGESTION_RAMP_FACTOR, TXPOOL_TIMEOUT_SECS,
+    EVENT_LOG_LOOKBACK_BLOCKS, EVENT_LOG_MAX_ENTRIES, FEE_HISTORY_BLOCKS, FEE_HISTORY_PERCENTILES,
+    MAX_BACKFILL_PER_CYCLE, RPC_TIMEOUT_SECS, STALE_AFTER, SUGGESTION_RAMP_FACTOR,
+    TXPOOL_TIMEOUT_SECS,
 };
+use crate::events::{EventRegistry, SystemEvent};
 use alloy::consensus::{Transaction as _, Typed2718 as _};
 use alloy::eips::eip4844::BlobTransactionSidecarItem;
 use alloy::primitives::{Address, B256, U256};
@@ -12,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use signet_constants::SignetSystemConstants;
 use signet_tx_cache::client::TxCache;
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     time::{Duration, Instant},
 };
 use tokio::time::timeout;
@@ -45,6 +47,45 @@ pub struct FeeHistoryMetrics {
     pub reward_percentiles: Vec<(u8, Vec<u128>)>, // (percentile, rewards per block in wei)
 }
 
+// ========================= BUILDER TRACKING =========================
+
+#[derive(Debug, Clone)]
+pub struct BuilderEntry {
+    pub address: Address,
+    pub name: Option<&'static str>,
+    pub block_count: usize,
+}
+
+/// Resolve a builder address to a human-readable name, if known.
+fn known_builder_name(address: &Address) -> Option<&'static str> {
+    // Well-known Signet builder addresses.
+    // Extend this table as new builders come online.
+    KNOWN_BUILDERS
+        .iter()
+        .find(|(addr, _)| addr == address)
+        .map(|(_, name)| *name)
+}
+
+/// Known builder address → name pairs.
+const KNOWN_BUILDERS: &[(Address, &str)] = &[];
+
+fn compute_builder_stats(block_history: &VecDeque<BlockInfo>) -> Vec<BuilderEntry> {
+    let mut counts: HashMap<Address, usize> = HashMap::new();
+    for block in block_history {
+        *counts.entry(block.builder).or_default() += 1;
+    }
+    let mut entries: Vec<BuilderEntry> = counts
+        .into_iter()
+        .map(|(address, block_count)| BuilderEntry {
+            name: known_builder_name(&address),
+            address,
+            block_count,
+        })
+        .collect();
+    entries.sort_by(|a, b| b.block_count.cmp(&a.block_count));
+    entries
+}
+
 // ========================= METRICS MODEL =========================
 
 #[derive(Debug, Clone)]
@@ -62,6 +103,8 @@ pub struct SignetMetrics {
     pub block_delay_threshold: u64,          // seconds
     pub txpool: Option<TxPoolMetrics>,
     pub host_contract_filter_active: bool,
+    pub builder_stats: Vec<BuilderEntry>,
+    pub events: VecDeque<SystemEvent>,
 
     // Gas tracking (EIP-1559)
     pub base_fee_per_gas: Option<u128>,           // wei
@@ -98,6 +141,7 @@ pub struct BlockInfo {
     pub tx_count: usize,
     pub gas_used: u64,
     pub gas_limit: u64,
+    pub builder: Address,
     pub blobs: Vec<BlobTransactionSidecarItem>,
 
     // header-derived gas fields
@@ -132,6 +176,8 @@ impl SignetMetrics {
             block_delay_threshold: config.block_delay_threshold,
             txpool: None,
             host_contract_filter_active: config.txpool_watch_signet_host_contracts,
+            builder_stats: Vec::new(),
+            events: VecDeque::new(),
 
             // init gas fields
             base_fee_per_gas: None,
@@ -256,6 +302,7 @@ impl SignetRpcClient {
             tx_count: block.transactions.len(),
             gas_used: block.header.gas_used,
             gas_limit: block.header.gas_limit,
+            builder: block.header.beneficiary,
             blobs: vec![],
 
             base_fee_per_gas,
@@ -291,6 +338,27 @@ impl SignetRpcClient {
         let res: EthFeeHistoryResult = serde_json::from_value(v["result"].clone())?;
         Ok(res)
     }
+
+    pub async fn get_logs(
+        &self,
+        addresses: &[Address],
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<alloy::rpc::types::Log>> {
+        let filter = alloy::rpc::types::Filter::new()
+            .address(addresses.to_vec())
+            .from_block(from_block)
+            .to_block(to_block);
+
+        let logs = timeout(
+            Duration::from_secs(RPC_TIMEOUT_SECS),
+            self.provider.get_logs(&filter),
+        )
+        .await
+        .map_err(|_| eyre::eyre!("eth_getLogs timed out after {}s", RPC_TIMEOUT_SECS))??;
+
+        Ok(logs)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -322,6 +390,8 @@ pub struct MetricsCollector {
     metrics: SignetMetrics,
     tx_client: Option<TxPoolClient>,
     txpool_watch_signet_host_contracts: bool,
+    event_registry: Option<EventRegistry>,
+    last_event_block: Option<u64>,
 }
 
 impl MetricsCollector {
@@ -333,6 +403,8 @@ impl MetricsCollector {
             metrics,
             tx_client: None,
             txpool_watch_signet_host_contracts: config.txpool_watch_signet_host_contracts,
+            event_registry: None,
+            last_event_block: None,
         })
     }
 
@@ -432,6 +504,8 @@ impl MetricsCollector {
                 }
                 BlockFetchPlan::None => {}
             }
+
+            self.metrics.builder_stats = compute_builder_stats(&self.metrics.block_history);
         }
 
         if matches!(status, ConnectionStatus::Connected) {
@@ -554,6 +628,7 @@ impl MetricsCollector {
             self.metrics.last_successful = Some(self.metrics.last_updated);
         }
         self.collect_txpool_metrics().await;
+        self.collect_events().await;
         &self.metrics
     }
 
@@ -620,6 +695,54 @@ impl MetricsCollector {
             }
         } else {
             self.metrics.txpool = None;
+        }
+    }
+
+    async fn collect_events(&mut self) {
+        let Some(current_block) = self.metrics.block_number else {
+            return;
+        };
+
+        // Lazy-init the registry once we know the chain ID.
+        if self.event_registry.is_none()
+            && let Some(chain_id) = self.metrics.chain_id
+        {
+            self.event_registry = EventRegistry::for_chain(chain_id);
+        }
+
+        let Some(registry) = &self.event_registry else {
+            return;
+        };
+
+        let from_block = self
+            .last_event_block
+            .map(|b| b + 1)
+            .unwrap_or_else(|| current_block.saturating_sub(EVENT_LOG_LOOKBACK_BLOCKS));
+
+        if from_block > current_block {
+            return;
+        }
+
+        let addresses = registry.filter_addresses();
+        match self
+            .client
+            .get_logs(&addresses, from_block, current_block)
+            .await
+        {
+            Ok(logs) => {
+                for log in &logs {
+                    if let Some(event) = registry.classify_log(log) {
+                        self.metrics.events.push_front(event);
+                    }
+                }
+                while self.metrics.events.len() > EVENT_LOG_MAX_ENTRIES {
+                    self.metrics.events.pop_back();
+                }
+                self.last_event_block = Some(current_block);
+            }
+            Err(_) => {
+                // Non-fatal: skip event collection this cycle.
+            }
         }
     }
 }
@@ -911,15 +1034,12 @@ fn host_watch_contracts_for_chain_id(chain_id: u64) -> Vec<Address> {
 }
 
 fn signet_constants_for_host_chain_id(chain_id: u64) -> Option<SignetSystemConstants> {
-    for constants in [
+    [
         SignetSystemConstants::parmigiana(),
         SignetSystemConstants::mainnet(),
-    ] {
-        if constants.host_chain_id() == chain_id {
-            return Some(constants);
-        }
-    }
-    None
+    ]
+    .into_iter()
+    .find(|constants| constants.host_chain_id() == chain_id)
 }
 
 enum BlockFetchPlan {
@@ -978,6 +1098,7 @@ mod tests {
         BlockFetchPlan, BlockInfo, Config, SignetMetrics, block_fetch_plan, count_items,
         host_watch_contracts_for_chain_id,
     };
+    use alloy::primitives::Address;
     use serde_json::json;
     use signet_constants::SignetSystemConstants;
     use std::collections::VecDeque;
@@ -1065,6 +1186,7 @@ mod tests {
             tx_count: 0,
             gas_used: 0,
             gas_limit: 0,
+            builder: Address::ZERO,
             blobs: Vec::new(),
             base_fee_per_gas: None,
             blob_gas_used: None,
@@ -1093,6 +1215,7 @@ mod tests {
             tx_count: 0,
             gas_used: 0,
             gas_limit: 0,
+            builder: Address::ZERO,
             blobs: Vec::new(),
             base_fee_per_gas: None,
             blob_gas_used: None,

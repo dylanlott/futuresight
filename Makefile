@@ -48,7 +48,7 @@ parmigiana: build
 	BLOCK_DELAY_SECS=$(BLOCK_DELAY_SECS) MAX_BLOCK_HISTORY=$(MAX_BLOCK_HISTORY) REFRESH_INTERVAL=$(REFRESH_INTERVAL) TXPOOL_MAX_ROWS=$(TXPOOL_MAX_ROWS) HOST_RPC_URL=https://host-rpc.parmigiana.signet.sh ROLLUP_RPC_URL=https://rpc.parmigiana.signet.sh TXPOOL_URL=$(TXPOOL_URL) $(CARGO) run -- $(RUN_ARGS)
 
 mainnet: build
-	BLOCK_DELAY_SECS=$(BLOCK_DELAY_SECS) MAX_BLOCK_HISTORY=$(MAX_BLOCK_HISTORY) REFRESH_INTERVAL=$(REFRESH_INTERVAL) TXPOOL_MAX_ROWS=$(TXPOOL_MAX_ROWS) HOST_RPC_URL=https://rpc.flashbots.net ROLLUP_RPC_URL=https://rpc.mainnet.signet.sh TXPOOL_URL=https://transactions.mainnet.signet.sh $(CARGO) run -- $(RUN_ARGS)
+	BLOCK_DELAY_SECS=$(BLOCK_DELAY_SECS) MAX_BLOCK_HISTORY=$(MAX_BLOCK_HISTORY) REFRESH_INTERVAL=$(REFRESH_INTERVAL) TXPOOL_MAX_ROWS=$(TXPOOL_MAX_ROWS) HOST_RPC_URL=https://rpc-host.mainnet.signet.sh ROLLUP_RPC_URL=https://rpc.mainnet.signet.sh TXPOOL_URL=https://transactions.mainnet.signet.sh $(CARGO) run -- $(RUN_ARGS)
 
 fmt:
 	$(CARGO) fmt --all
