@@ -8,13 +8,23 @@ FutureSight is a Rust terminal dashboard for monitoring Ethereum RPC health, rec
 
 ## What It Shows
 
+### Dashboard Tab
+
 - Connection state with stale and error signaling
 - Current chain ID and best observed chain height
 - Rollup tip sync status against the host tip, including block difference when out of sync and a red rollup feed box when unsynced
 - Block age and chain halt alerts
 - EIP-1559 fee telemetry, fee suggestions, utilization gauge, and fee trend sparkline
 - Rolling block tape with gas usage and base fee context
+- Rollup builder tracking: per-block builder address in the block tape, plus a builder breakdown panel showing block count and share percentage per builder
 - Optional tx-pool service health, cache counts, and recent transactions in the rollup panel
+
+### Events Tab
+
+- On-chain event log sourced from Signet system contracts (Zenith, Orders, Passage, Transactor)
+- Events from both host and rollup chains merged newest-first
+- Classified event types: BlockSubmitted, SequencerSet, Enter/Exit, Order/Filled, Sweep, Transact, Withdrawal, and more
+- Scrollable with `j`/`k`/`↑`/`↓` and `PageUp`/`PageDown`
 
 ## Build
 
@@ -102,10 +112,49 @@ Notes:
 - `--txpool-url` is a network-level tx-pool endpoint. For known Parmigiana and mainnet hosts, FutureSight auto-populates the watched host system contracts from Signet constants instead of taking a manual contract list.
 - `--no-txpool-list` disables fetching transaction rows while keeping tx-pool summary requests enabled.
 
+### Compile-Time Constants
+
+Additional tuning knobs live in `src/config.rs`. These are not exposed as CLI flags but can be adjusted before building.
+
+Constant                    | Default | Description
+--------------------------- | ------- | -------------------------------------------
+`STALE_AFTER`               | `15s`   | Duration without a successful update before status flips to Stale
+`MAX_BACKFILL_PER_CYCLE`    | `12`    | Maximum missing blocks fetched per refresh cycle
+`RPC_TIMEOUT_SECS`          | `6`     | HTTP timeout for JSON-RPC calls
+`TXPOOL_TIMEOUT_SECS`       | `4`     | HTTP timeout for tx-pool requests
+`FEE_HISTORY_BLOCKS`        | `24`    | Number of blocks requested in `eth_feeHistory`
+`FEE_HISTORY_PERCENTILES`   | `[10, 25, 50, 75, 90]` | Reward percentiles for fee suggestions
+`SUGGESTION_RAMP_FACTOR`    | `2.0`   | Headroom multiplier for maxFee suggestion
+`GAS_ALERT_HIGH_GWEI`       | `100`   | Base fee threshold (Gwei) for red highlighting
+`GAS_SPIKE_MULTIPLIER`      | `2.0`   | Base fee vs moving average ratio for spike detection
+`EVENT_LOG_MAX_ENTRIES`      | `500`   | Maximum system events retained in memory per chain
+`EVENT_LOG_LOOKBACK_BLOCKS`  | `50`    | Initial lookback depth (in blocks) when the event log first connects
+
+### Builder Name Registry
+
+Builder addresses are resolved to human-readable names via a static lookup table in `src/data.rs`. To register known builders, add entries to the `KNOWN_BUILDERS` const:
+
+```rust
+use alloy::primitives::address;
+
+const KNOWN_BUILDERS: &[(Address, &str)] = &[
+    (address!("abcd...1234"), "Builder Name"),
+];
+```
+
+Unknown builders are displayed as truncated addresses (e.g., `0xabcd..1234`).
+
 ## Controls
 
-- `q`
-- `Esc`
+Key              | Action
+---------------- | -------------------------------------------
+`q` / `Esc`      | Quit
+`Tab`            | Switch between Dashboard and Events tabs
+`f`              | Toggle host contract filter on/off
+`↑` / `k`       | Scroll up (Events tab)
+`↓` / `j`       | Scroll down (Events tab)
+`PageUp`         | Scroll up 20 rows (Events tab)
+`PageDown`       | Scroll down 20 rows (Events tab)
 
 ## Make Targets
 
