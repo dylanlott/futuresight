@@ -211,6 +211,7 @@ fn short_topic_addr(topic: &B256) -> String {
 fn event_contracts_for_chain_id(chain_id: u64) -> (&'static str, Vec<(Address, &'static str)>) {
     for constants in [
         SignetSystemConstants::parmigiana(),
+        SignetSystemConstants::gouda(),
         SignetSystemConstants::mainnet(),
     ] {
         if constants.host_chain_id() == chain_id {

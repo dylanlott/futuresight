@@ -80,6 +80,7 @@ Use the Makefile wrappers:
 make run
 make dev
 make parmigiana
+make gouda
 make mainnet
 ```
 
@@ -88,6 +89,7 @@ Notes:
 - `cargo run` uses the CLI defaults shown in the table below.
 - `make run` falls back to the same Parmigiana endpoint defaults as the CLI, but existing shell env vars or `make` variable overrides still win.
 - `make parmigiana` forces `HOST_RPC_URL=https://host-rpc.parmigiana.signet.sh` and `ROLLUP_RPC_URL=https://rpc.parmigiana.signet.sh`.
+- `make gouda` runs the gouda rollup against the parmigiana host: `HOST_RPC_URL=https://host-rpc.parmigiana.signet.sh`, `ROLLUP_RPC_URL=https://rpc.gouda.signet.sh`, `TXPOOL_URL=https://transactions.gouda.signet.sh`. Gouda reuses the Parmigiana host chain (chain id `3151908`); the host-contract watch list resolves to Parmigiana's contracts by default.
 - `make mainnet` forces `HOST_RPC_URL=https://rpc.flashbots.net` and `ROLLUP_RPC_URL=https://rpc.mainnet.signet.sh`.
 - `make run RUN_ARGS="--no-txpool-list"` is the Makefile path for flags that do not have env-var equivalents.
 

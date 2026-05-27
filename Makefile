@@ -11,7 +11,7 @@ REFRESH_INTERVAL ?= 2
 TXPOOL_MAX_ROWS ?= 12
 RUN_ARGS ?=
 
-.PHONY: help build run dev release fmt lint clean test watch parmigiana mainnet
+.PHONY: help build run dev release fmt lint clean test watch parmigiana gouda mainnet
 
 help:
 	@echo "FutureSight Make Targets"
@@ -22,6 +22,7 @@ help:
 	@echo "  make dev            - Alias for make watch"
 	@echo "  make watch          - Run with cargo-watch (requires cargo-watch)"
 	@echo "  make parmigiana     - Run with parmigiana defaults"
+	@echo "  make gouda          - Run with gouda defaults (gouda rollup on parmigiana host)"
 	@echo "  make mainnet        - Run with mainnet defaults"
 	@echo "  make test           - Run tests"
 	@echo "  make fmt            - Format code"
@@ -46,6 +47,9 @@ watch:
 
 parmigiana: build
 	BLOCK_DELAY_SECS=$(BLOCK_DELAY_SECS) MAX_BLOCK_HISTORY=$(MAX_BLOCK_HISTORY) REFRESH_INTERVAL=$(REFRESH_INTERVAL) TXPOOL_MAX_ROWS=$(TXPOOL_MAX_ROWS) HOST_RPC_URL=https://host-rpc.parmigiana.signet.sh ROLLUP_RPC_URL=https://rpc.parmigiana.signet.sh TXPOOL_URL=$(TXPOOL_URL) $(CARGO) run -- $(RUN_ARGS)
+
+gouda: build
+	BLOCK_DELAY_SECS=$(BLOCK_DELAY_SECS) MAX_BLOCK_HISTORY=$(MAX_BLOCK_HISTORY) REFRESH_INTERVAL=$(REFRESH_INTERVAL) TXPOOL_MAX_ROWS=$(TXPOOL_MAX_ROWS) HOST_RPC_URL=https://host-rpc.parmigiana.signet.sh ROLLUP_RPC_URL=https://rpc.gouda.signet.sh TXPOOL_URL=https://transactions.gouda.signet.sh $(CARGO) run -- $(RUN_ARGS)
 
 mainnet: build
 	BLOCK_DELAY_SECS=$(BLOCK_DELAY_SECS) MAX_BLOCK_HISTORY=$(MAX_BLOCK_HISTORY) REFRESH_INTERVAL=$(REFRESH_INTERVAL) TXPOOL_MAX_ROWS=$(TXPOOL_MAX_ROWS) HOST_RPC_URL=https://rpc-host.mainnet.signet.sh ROLLUP_RPC_URL=https://rpc.mainnet.signet.sh TXPOOL_URL=https://transactions.mainnet.signet.sh $(CARGO) run -- $(RUN_ARGS)

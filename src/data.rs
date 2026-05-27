@@ -12,7 +12,7 @@ use alloy_provider::{Provider as ProviderTrait, RootProvider as AlloyProvider};
 use eyre::Result;
 use serde::{Deserialize, Serialize};
 use signet_constants::SignetSystemConstants;
-use signet_tx_cache::client::TxCache;
+use signet_tx_cache::TxCache;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     time::{Duration, Instant},
@@ -1034,8 +1034,11 @@ fn host_watch_contracts_for_chain_id(chain_id: u64) -> Vec<Address> {
 }
 
 fn signet_constants_for_host_chain_id(chain_id: u64) -> Option<SignetSystemConstants> {
+    // Gouda shares parmigiana's host chain id (3151908), so a chain-id-only
+    // lookup is inherently ambiguous on that host. Parmigiana wins by order.
     [
         SignetSystemConstants::parmigiana(),
+        SignetSystemConstants::gouda(),
         SignetSystemConstants::mainnet(),
     ]
     .into_iter()
